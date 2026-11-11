@@ -230,3 +230,11 @@ def test_start_raises_runtime_error_when_mic_fails():
         listener.start()
     assert not listener.is_running()
     listener.stop()  # safe after failed start
+
+
+def test_s4b_extra_classes_and_alarm_exclusion():
+    assert "Steam whistle" in CATEGORY_CLASSES["pressure_cooker"]
+    assert "Breaking" in CATEGORY_CLASSES["glass_break"]
+    assert {"Bow-wow", "Yip"} <= set(CATEGORY_CLASSES["dog_bark"])
+    assert "Buzzer" in CATEGORY_CLASSES["appliance_beep"]
+    assert "Alarm" not in CATEGORY_CLASSES["smoke_alarm"]  # see comment in category_map.py

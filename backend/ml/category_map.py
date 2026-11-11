@@ -35,18 +35,21 @@ from contracts.types import (
 
 # Category ID -> YAMNet display names (exact strings from yamnet_class_map.csv).
 CATEGORY_CLASSES: dict[str, list[str]] = {
+    # Generic "Alarm" is deliberately excluded: alarm clocks and phone alarms
+    # would otherwise raise critical smoke-alarm alerts. Experiment 1 evaluates
+    # this choice.
     SMOKE_ALARM: ["Smoke detector, smoke alarm", "Fire alarm"],
-    GLASS_BREAK: ["Glass", "Shatter"],
+    GLASS_BREAK: ["Glass", "Shatter", "Breaking"],
     # YAMNet has no "pressure cooker" class. From YAMNet alone this category
     # is just generic whistling/steam/hiss (a kettle, a person whistling,
     # a hissing tap all score here). Custom profiles (S5), recorded from the
     # user's own cooker, refine it into "this is MY cooker".
-    PRESSURE_COOKER: ["Whistling", "Whistle", "Steam", "Hiss"],
+    PRESSURE_COOKER: ["Whistling", "Whistle", "Steam", "Hiss", "Steam whistle"],
     BABY_CRY: ["Baby cry, infant cry"],
     DOOR_KNOCK: ["Knock"],
     DOORBELL: ["Doorbell", "Ding-dong"],
-    DOG_BARK: ["Bark", "Dog"],
-    APPLIANCE_BEEP: ["Beep, bleep", "Microwave oven"],
+    DOG_BARK: ["Bark", "Dog", "Bow-wow", "Yip"],
+    APPLIANCE_BEEP: ["Beep, bleep", "Microwave oven", "Buzzer"],
     WATER_RUNNING: ["Water tap, faucet", "Sink (filling or washing)"],
 }
 
