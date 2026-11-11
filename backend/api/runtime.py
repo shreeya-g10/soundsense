@@ -96,7 +96,12 @@ class BackendRuntime:
             self.listener: AudioListener = listener
         else:
             scenario = os.getenv("SOUNDSENSE_FAKE_SCENARIO", "whistles")
-            self.listener = FakeListener(on_window=self.engine.on_window, scenario=scenario)
+            loop = os.getenv("SOUNDSENSE_FAKE_LOOP", "false").lower() in ("1", "true", "yes")
+            self.listener = FakeListener(
+                on_window=self.engine.on_window,
+                scenario=scenario,
+                loop=loop,
+            )
 
         self.remote_audio: RemoteAudioInput = remote_audio or FakeRemoteAudioInput(
             on_window=self.engine.on_window

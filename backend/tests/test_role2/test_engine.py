@@ -215,3 +215,35 @@ def test_fake_listener_whistles_end_to_end(store: SQLiteStore) -> None:
 
     assert len(alerts) == 3
     assert [a["label"] for a in alerts] == ["Whistle 1 of 3", "Whistle 2 of 3", "Whistle 3 of 3"]
+    assert [a["priority"] for a in alerts] == ["high", "high", "critical"]
+
+
+def test_disabled_category_and_sensitivity_extremes(store: SQLiteStore) -> None:
+    settings = store.get_settings()
+    settings["categories"][DOORBELL]["enabled"] = False
+    settings["categories"][BABY_CRY]["sensitivity"] = 1.0  # threshold 0.30
+    settings["categories"][SMOKE_ALARM]["sensitivity"] = 0.0  # threshold 0.80
+    store.save_settings(settings)
+
+    engine = DetectionEngine(store)
+    t0 = 1_700_000_000.0
+    assert engine.process_window(_window(ts=t0, category=DOORBELL, score=0.95)) is None
+    assert engine.process_window(_window(ts=t0 + 1, category=SMOKE_ALARM, score=0.75)) is None
+    baby = engine.process_window(_window(ts=t0 + 2, category=BABY_CRY, score=0.35))
+    assert baby is not None and baby["category"] == BABY_CRY
+
+
+def test_overnight_quiet_hours_and_queue_overflow(store: SQLiteStore) -> None:
+    assert DetectionEngine._is_quiet_hours(
+        {"enabled": True, "start": "22:00", "end": "07:00"},
+        datetime.now().astimezone().replace(hour=23, minute=30).timestamp(),
+    )
+    assert not DetectionEngine._is_quiet_hours(
+        {"enabled": True, "start": "22:00", "end": "07:00"},
+        datetime.now().astimezone().replace(hour=14, minute=0).timestamp(),
+    )
+
+    engine = DetectionEngine(store, config=EngineConfig(queue_maxsize=2))
+    for i in range(5):
+        engine.on_window(_window(ts=1_700_000_000.0 + i, skipped=True))
+    assert engine._queue.qsize() == 2

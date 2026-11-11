@@ -226,3 +226,39 @@ def test_ws_listener_phase5(client) -> None:
         msg = ws.receive_json()
         assert msg["type"] == "alert"
         assert msg["room"] == "Kitchen"
+
+
+def test_validation_errors_and_mic_failure(client) -> None:
+    tc, rt = client
+
+    # Invalid history filters -> 422
+    assert tc.get("/api/history", params={"category": "bad_cat"}).status_code == 422
+    assert tc.get("/api/history", params={"from": "not-a-timestamp"}).status_code == 422
+
+    # Invalid settings payloads -> 422
+    s = tc.get("/api/settings").json()
+    bad_time = dict(s)
+    bad_time["quiet_hours"] = {"enabled": True, "start": "25:99", "end": "07:00"}
+    assert tc.put("/api/settings", json=bad_time).status_code == 422
+
+    bad_style = dict(s)
+    bad_style["alert_style"] = "popup"
+    assert tc.put("/api/settings", json=bad_style).status_code == 422
+
+    # Listener start failure -> 500 and mic_ok becomes False
+    class BrokenListener:
+        def start(self) -> None:
+            raise RuntimeError("Microphone not available")
+
+        def stop(self) -> None:
+            pass
+
+        def is_running(self) -> bool:
+            return False
+
+    rt.listener = BrokenListener()
+    res = tc.post("/api/monitor/start")
+    assert res.status_code == 500
+    status = tc.get("/api/status").json()
+    assert status["mic_ok"] is False
+    assert status["monitoring"] is False
