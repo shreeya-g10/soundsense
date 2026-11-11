@@ -1,0 +1,67 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ---- Node ----
+node_modules/
+frontend/dist/
+.vite/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Data (keep only the README) ----
+data/*
+!data/README.md
+
+# ---- Audio ----
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# ---- Databases ----
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ---- Embeddings / arrays ----
+*.npz
+*.npy
+
+# ---- Models & model caches ----
+*.h5
+*.keras
+*.tflite
+*.pkl
+*.joblib
+saved_model/
+models/
+.tfhub_modules/
+tfhub_modules/
+.cache/
+
+# ---- Environment / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
