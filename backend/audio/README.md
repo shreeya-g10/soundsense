@@ -41,6 +41,6 @@ mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread
 - `start()` returns immediately. On the first start, YAMNet loads on the worker thread while windows queue up.
 - Windows arrive in capture order. If inference falls ~15 s behind, the oldest windows are dropped and counted.
 - `listener.gate.enabled` is the `cpu_saver` setting. `listener.stats()` returns the gate counts plus dropped windows and mic overflows.
-- `profile_store` is accepted now, but `custom_matches` stays `[]` until S5.
+- `profile_store`: if it has `match(embedding)` (the real `YamnetProfileStore` from S5 does), `custom_matches` is filled on every active window. If matching fails, the window is still delivered with `custom_matches=[]`.
 
 Demo: `python -m backend.audio.demo_listener [--calibrate] [--seconds 0] [--no-cpu-saver]`

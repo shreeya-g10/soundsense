@@ -68,8 +68,10 @@ class YamnetListener:
             threshold: Silence-gate RMS threshold.
             calibrate: Measure ~2 s of room noise at each start() and set the
                 threshold from it.
-            profile_store: Custom-sound store used to fill custom_matches
-                (from S5; until then custom_matches is always []).
+            profile_store: Custom-sound store. If it has a
+                ``match(embedding) -> list[CustomMatch]`` method (the real
+                YamnetProfileStore does), it fills custom_matches on every
+                active window.
         """
         self._on_window = on_window
         self.room = room
@@ -189,6 +191,16 @@ class YamnetListener:
             except Exception:
                 log.exception("on_window callback raised")
 
+    def _custom_matches(self, embedding: np.ndarray) -> list:
+        match = getattr(self.profile_store, "match", None)
+        if match is None:
+            return []
+        try:
+            return list(match(embedding))
+        except Exception:
+            log.exception("Custom-sound matching failed; continuing without matches")
+            return []
+
     def _analyse(self, samples: np.ndarray, timestamp: float, decision) -> WindowResult:
         if decision.skipped:
             return WindowResult(
@@ -210,7 +222,7 @@ class YamnetListener:
             category_scores=self._mapper.category_scores(out.scores),
             context_scores=self._mapper.context_scores(out.scores),
             embedding=out.embedding.tolist(),
-            custom_matches=[],  # S5: filled from self.profile_store
+            custom_matches=self._custom_matches(out.embedding),
             inference_ms=out.inference_ms,
             room=self.room,
         )
