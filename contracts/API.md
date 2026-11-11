@@ -4,6 +4,7 @@
 
 - **Implemented by:** Vaidehi (Role 2), in `backend/api/`
 - **Used by:** Sneha (Role 3), in `frontend/` and `listener/`
+- **Phase 5 audio input:** `/ws/listener` frames are passed to `RemoteAudioInput.push()`, implemented by Shreeya (Role 1)
 
 ## Conventions
 
@@ -212,6 +213,58 @@ URL (dev): `ws://localhost:8000/ws/live`. Messages flow **server → client** on
 ```json
 {"type": "status", "monitoring": true}
 ```
+
+---
+
+## WebSocket `/ws/listener` (Phase 5, optional)
+
+Lets a phone act as an extra microphone in another room. Sneha's `listener/` page streams the phone's mic to the laptop; Vaidehi's endpoint passes each frame to `RemoteAudioInput.push()` (Shreeya, `contracts/types.py`).
+
+**URL:** `wss://<laptop-ip>:8000/ws/listener?room=<RoomName>`, e.g. `?room=Kitchen`.
+
+- `room` is required. If it's missing or empty, the server closes the connection with code `1008`.
+- **HTTPS required.** Phone browsers only allow mic access on a secure origin, so for Phase 5 the backend runs with a self-signed certificate (`uvicorn ... --ssl-keyfile key.pem --ssl-certfile cert.pem`). The user accepts the certificate warning once on the phone. Certificate and key files are never committed.
+- The backend serves the `listener/` page from the same HTTPS origin, so the page and the WebSocket share one certificate.
+
+### Client → server: binary frames
+
+Each WebSocket **binary** message is one chunk of raw audio:
+
+| Property | Value |
+|---|---|
+| Encoding | Float32 PCM, little-endian, values -1.0 to 1.0 |
+| Sample rate | 16 000 Hz (resample in the browser if the mic runs at 44.1/48 kHz) |
+| Channels | 1 (mono) |
+| Chunk size | ~0.5 s = 8000 samples = 32 000 bytes |
+
+The client sends no JSON messages.
+
+### Server → client: JSON text frames
+
+**`ack`:** sent once on connect.
+
+```json
+{"type": "ack", "room": "Kitchen"}
+```
+
+**`alert`:** sent for every alert whose `room` matches this connection's room. Same format as the `alert` message on `/ws/live`.
+
+```json
+{
+  "type": "alert",
+  "id": "k9x2m1",
+  "category": "doorbell",
+  "label": "Doorbell",
+  "confidence": 0.81,
+  "priority": "medium",
+  "timestamp": "2026-11-12T19:04:05+05:30",
+  "room": "Kitchen",
+  "custom_name": null,
+  "escalated": false
+}
+```
+
+Alerts from phone rooms also appear on `/ws/live` and in `/api/history`, with `room` set to the phone's room name.
 
 ---
 

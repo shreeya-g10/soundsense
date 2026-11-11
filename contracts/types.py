@@ -208,6 +208,46 @@ class AudioListener(Protocol):
         ...
 
 
+LISTENER_SAMPLE_RATE = 16000
+"""Sample rate (Hz) of audio pushed to RemoteAudioInput: mono Float32 PCM."""
+
+
+class RemoteAudioInput(Protocol):
+    """Audio input from a phone listener page (Phase 5, optional).
+
+    Implemented by: Shreeya (Role 1). Runs the same pipeline as AudioListener
+    (silence skip, YAMNet, custom matching) and produces WindowResult objects
+    whose ``room`` is the room passed to push().
+    Called by: Vaidehi (Role 2), from the /ws/listener WebSocket endpoint,
+    once per binary frame received (see contracts/API.md).
+    Audio source: Sneha (Role 3), the listener/ page, which sends the frames.
+
+    Results go to the ``on_window`` callback given to the constructor, with
+    the same threading rules as AudioListener. Audio is processed in memory
+    only and never saved.
+    """
+
+    def __init__(self, on_window: Callable[[WindowResult], None]) -> None:
+        """Create the input. ``on_window`` receives every WindowResult."""
+        ...
+
+    def push(self, samples: bytes, room: str) -> None:
+        """Feed one chunk of audio from a phone.
+
+        Args:
+            samples: Raw little-endian Float32 PCM, mono, LISTENER_SAMPLE_RATE
+                (16 kHz), values -1..1. Usually ~0.5 s (8000 samples = 32000
+                bytes), but any length that is a multiple of 4 bytes is
+                accepted. Raises ValueError otherwise.
+            room: Room name from the phone, e.g. "Kitchen". Each room is
+                buffered and windowed separately.
+
+        Returns quickly: chunks are buffered and analysed on a worker thread,
+        so this is safe to call from an async WebSocket handler.
+        """
+        ...
+
+
 class ProfileStore(Protocol):
     """Stores user-taught custom sounds and the feedback that tunes detection.
 

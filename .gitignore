@@ -65,3 +65,8 @@ tfhub_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# ---- TLS certs (Phase 5 self-signed) ----
+*.pem
+*.key
+*.crt

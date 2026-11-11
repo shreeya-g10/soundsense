@@ -44,9 +44,9 @@ Each person works on their own branch and merges at the end. Because no two peop
 - **Pull `main` into your branch only when a `contracts/` change is announced.** Otherwise stay on your branch.
 
 ## Rules
-**contracts/ is the source of truth. Code against it exactly. If it must change, tell the whole team, make one small commit to main, and everyone pulls main into their branch.**
+**contracts/ is the source of truth. Code against it exactly. If it must change, tell the whole team and open a small pull request that changes only `contracts/`; Shreeya reviews and merges it, then announces it, and everyone pulls `main` into their branch.**
 
 1. **Only edit files in your own role's folders.** If you need something from another role's code, depend on the interface in `contracts/` and don't change their files.
-2. **Never modify `contracts/`, `requirements.txt`, `AGENTS.md` or `CLAUDE.md` without team agreement.** Propose changes to the team first, then one person opens a pull request to `main` and announces it once merged.
+2. **Never modify `contracts/`, `requirements.txt`, `AGENTS.md` or `CLAUDE.md` without team agreement.** Propose changes to the team first, then open a small pull request that changes only those files; Shreeya reviews and merges it, then announces it.
 3. **Never commit audio, models, `.db` files or `node_modules`.** `.gitignore` enforces this. Don't force-add around it.
 4. **No audio is ever saved to disk**, with one exception: custom-sound embeddings (numeric vectors, not audio). Raw audio and spectrograms stay in memory only.
