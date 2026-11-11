@@ -81,12 +81,14 @@ def format_iso_local(epoch: float | None = None) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-def parse_iso_to_epoch(value: str) -> float:
+def parse_iso_to_epoch(value: str, *, end_of_day: bool = False) -> float:
     """Parse an ISO 8601 string into Unix epoch seconds."""
     normalized = value.strip()
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
     dt = datetime.fromisoformat(normalized)
+    if end_of_day and len(normalized) == 10 and "T" not in normalized and " " not in normalized:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_local_tz())
     return dt.timestamp()
@@ -301,7 +303,7 @@ class SQLiteStore:
             params.append(parse_iso_to_epoch(from_ts))
         if to_ts:
             clauses.append("timestamp_epoch <= ?")
-            params.append(parse_iso_to_epoch(to_ts))
+            params.append(parse_iso_to_epoch(to_ts, end_of_day=True))
         if q:
             clauses.append(
                 "(INSTR(LOWER(label), LOWER(?)) > 0 "

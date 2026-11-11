@@ -186,3 +186,19 @@ def test_whistle_counter_persistence(store: SQLiteStore) -> None:
         store.update_whistle_counter(True, 0)
     with pytest.raises(ValueError):
         store.update_whistle_counter(True, True)  # type: ignore[arg-type]
+
+
+def test_date_only_to_filter_includes_full_day(store: SQLiteStore) -> None:
+    now_dt = datetime.now().astimezone().replace(hour=15, minute=30, second=0, microsecond=0)
+    date_str = now_dt.strftime("%Y-%m-%d")
+    store.add_event(
+        event_id="day1",
+        timestamp_epoch=now_dt.timestamp(),
+        category=DOORBELL,
+        label="Doorbell",
+        confidence=0.85,
+        priority="medium",
+        alerted=True,
+    )
+    res = store.get_history(from_ts=date_str, to_ts=date_str)
+    assert [e["id"] for e in res] == ["day1"]

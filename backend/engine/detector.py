@@ -472,6 +472,8 @@ class DetectionEngine:
             if whistle["enabled"]:
                 whistle = self.store.increment_whistle_counter()
                 label = f"Whistle {whistle['count']} of {whistle['target']}"
+                if whistle["count"] >= whistle["target"]:
+                    priority = PRIORITY_CRITICAL
 
         event_id = uuid.uuid4().hex[:8]
         custom_name = custom_match.name if custom_match else None

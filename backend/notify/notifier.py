@@ -111,13 +111,18 @@ class ScreenFlasher:
         root.withdraw()
 
         def hide_banner(*_args: Any) -> None:
+            if self._hide_after_id is not None:
+                try:
+                    root.after_cancel(self._hide_after_id)
+                except Exception:
+                    pass
+                self._hide_after_id = None
             if self._window is not None:
                 try:
                     self._window.destroy()
                 except Exception:
                     pass
                 self._window = None
-            self._hide_after_id = None
 
         def show_banner(payload: FlashPayload) -> None:
             hide_banner()
@@ -168,7 +173,6 @@ class ScreenFlasher:
             for widget in (win, frame, title_lbl, sub_lbl):
                 widget.bind("<Button-1>", hide_banner)
             win.bind("<Escape>", hide_banner)
-            win.focus_force()
 
             self._window = win
             duration = self.duration_ms + (1500 if payload.escalated else 0)

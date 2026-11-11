@@ -80,3 +80,54 @@ def test_alert_dispatcher_routes_channels() -> None:
         ("desktop", "a1"),
         ("telegram", False, "a1"),
     ]
+
+
+def test_telegram_enabled_posts_and_handles_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent_payloads = []
+
+    class MockResponse:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class MockAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url: str, json: dict):
+            sent_payloads.append((url, json))
+            return MockResponse(200)
+
+    monkeypatch.setattr("backend.notify.notifier.httpx.AsyncClient", MockAsyncClient)
+    tg = TelegramNotifier()
+    ok = asyncio.run(
+        tg.send(
+            {"label": "Smoke alarm", "priority": "critical", "room": "Kitchen", "escalated": True},
+            {"enabled": True, "bot_token": "tok123", "chat_id": "999"},
+        )
+    )
+    assert ok is True
+    assert "bot/tok123/sendMessage" not in sent_payloads[0][0]
+    assert "bottok123/sendMessage" in sent_payloads[0][0]
+    assert sent_payloads[0][1]["chat_id"] == "999"
+    assert "[ESCALATED]" in sent_payloads[0][1]["text"]
+
+    class BrokenAsyncClient(MockAsyncClient):
+        async def post(self, url: str, json: dict):
+            raise RuntimeError("network offline")
+
+    monkeypatch.setattr("backend.notify.notifier.httpx.AsyncClient", BrokenAsyncClient)
+    assert (
+        asyncio.run(
+            tg.send(
+                {"label": "Doorbell", "priority": "medium", "room": "Laptop"},
+                {"enabled": True, "bot_token": "tok123", "chat_id": "999"},
+            )
+        )
+        is False
+    )

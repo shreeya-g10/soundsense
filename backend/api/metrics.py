@@ -18,6 +18,7 @@ class ProcessMetrics:
         self._lock = threading.Lock()
         self._last_wall = time.monotonic()
         self._last_cpu = self._read_cpu_time()
+        self._last_pct = 0.0
         self._cpu_count = os.cpu_count() or 1
 
     @staticmethod
@@ -32,11 +33,12 @@ class ProcessMetrics:
             wall_dt = now_wall - self._last_wall
             cpu_dt = now_cpu - self._last_cpu
             if wall_dt < 0.05:
-                return 0.0
+                return self._last_pct
             self._last_wall = now_wall
             self._last_cpu = now_cpu
             pct = (cpu_dt / (wall_dt * self._cpu_count)) * 100.0
-            return round(max(0.0, min(100.0, pct)), 1)
+            self._last_pct = round(max(0.0, min(100.0, pct)), 1)
+            return self._last_pct
 
     @staticmethod
     def ram_mb() -> float:
