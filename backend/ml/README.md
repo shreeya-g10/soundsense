@@ -20,3 +20,9 @@ python -m backend.ml.demo_yamnet --live                  # mic + silence gate, t
 python -m backend.ml.demo_yamnet --live --calibrate --seconds 0
 python -m backend.ml.demo_yamnet --benchmark             # average inference time per window
 ```
+
+## Part S4: category mapping (`category_map.py`)
+
+- `CategoryMapper(class_names)` maps YAMNet's 521 scores to the 9 SoundSense categories. Each category's score is the **max** of its mapped classes. It also produces the `speech`, `music` and `television` context scores.
+- Every mapped name is checked against the real class map when the mapper is built. A missing or misspelled name raises `ValueError`.
+- `pressure_cooker` from YAMNet alone means generic whistling/steam/hiss. Custom profiles (S5) refine it to the user's own cooker.

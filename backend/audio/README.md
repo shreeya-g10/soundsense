@@ -30,3 +30,17 @@ python -m backend.audio.demo_capture --no-cpu-saver            # S2: gate off, n
 ```
 
 Tests: `python -m pytest backend/tests/test_role1`
+
+## Part S4: the real AudioListener (`listener.py`)
+
+`YamnetListener(on_window, device=None, *, room="Laptop", cpu_saver=True, threshold=0.003, calibrate=False, profile_store=None)` implements `contracts.types.AudioListener`:
+
+mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread (YAMNet + category map) → `on_window(WindowResult)`
+
+- Skipped windows follow the contract: empty dicts, `embedding=None`, `custom_matches=[]`, `inference_ms=0`.
+- `start()` returns immediately. On the first start, YAMNet loads on the worker thread while windows queue up.
+- Windows arrive in capture order. If inference falls ~15 s behind, the oldest windows are dropped and counted.
+- `listener.gate.enabled` is the `cpu_saver` setting. `listener.stats()` returns the gate counts plus dropped windows and mic overflows.
+- `profile_store` is accepted now, but `custom_matches` stays `[]` until S5.
+
+Demo: `python -m backend.audio.demo_listener [--calibrate] [--seconds 0] [--no-cpu-saver]`
