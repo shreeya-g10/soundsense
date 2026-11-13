@@ -10,6 +10,7 @@ Run from the repo root:
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -20,6 +21,9 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.api.routes import router
 from backend.api.runtime import BackendRuntime
+from backend.audio.listener import YamnetListener
+from backend.audio.remote_input import YamnetRemoteInput
+from backend.custom.profile_store import YamnetProfileStore
 
 
 def create_app(runtime: BackendRuntime | None = None) -> FastAPI:
@@ -27,7 +31,18 @@ def create_app(runtime: BackendRuntime | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:
-        rt = runtime or BackendRuntime()
+        if runtime is not None:
+            rt = runtime
+        elif os.getenv("SOUNDSENSE_USE_FAKES", "false").lower() in ("1", "true", "yes"):
+            rt = BackendRuntime(use_fakes=True)
+        else:
+            store = YamnetProfileStore()
+            rt = BackendRuntime(profile_store=store)
+            saved_settings = rt.store.get_settings()
+            cpu_saver = bool(saved_settings.get("cpu_saver", True))
+            rt.listener = YamnetListener(rt.engine.on_window, profile_store=store, cpu_saver=cpu_saver)
+            rt.remote_audio = YamnetRemoteInput(rt.engine.on_window, profile_store=store, cpu_saver=cpu_saver)
+
         fastapi_app.state.runtime = rt
         rt.startup(asyncio.get_running_loop())
         try:

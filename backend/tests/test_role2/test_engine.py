@@ -247,3 +247,29 @@ def test_overnight_quiet_hours_and_queue_overflow(store: SQLiteStore) -> None:
     for i in range(5):
         engine.on_window(_window(ts=1_700_000_000.0 + i, skipped=True))
     assert engine._queue.qsize() == 2
+
+
+def test_is_negative_blocks_base_model_alert(store: SQLiteStore) -> None:
+    class MockProfileStore:
+        def __init__(self):
+            self.negatives = set()
+
+        def is_negative(self, embedding, category):
+            return category in self.negatives
+
+    pstore = MockProfileStore()
+    engine = DetectionEngine(store, profile_store=pstore)
+
+    t0 = 1_700_000_000.0
+    # Before marking negative -> alert fires
+    alert = engine.process_window(_window(ts=t0, category=DOORBELL, score=0.9))
+    assert alert is not None and alert["category"] == DOORBELL
+
+    # Mark doorbell negative -> base-model alert is suppressed
+    pstore.negatives.add(DOORBELL)
+    suppressed = engine.process_window(_window(ts=t0 + 10, category=DOORBELL, score=0.9))
+    assert suppressed is None
+
+    # Other categories (like smoke_alarm) are not affected
+    smoke = engine.process_window(_window(ts=t0 + 20, category=SMOKE_ALARM, score=0.95))
+    assert smoke is not None and smoke["category"] == SMOKE_ALARM

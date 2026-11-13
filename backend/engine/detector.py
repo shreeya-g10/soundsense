@@ -33,6 +33,7 @@ from contracts.types import (
     SMOKE_ALARM,
     WATER_RUNNING,
     CustomMatch,
+    ProfileStore,
     WindowResult,
 )
 
@@ -118,11 +119,13 @@ class DetectionEngine:
     def __init__(
         self,
         store: SQLiteStore,
+        profile_store: ProfileStore | None = None,
         on_level: Callable[[dict[str, Any]], None] | None = None,
         on_alert: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         config: EngineConfig | None = None,
     ) -> None:
         self.store = store
+        self.profile_store = profile_store
         self._on_level = on_level
         self._on_alert = on_alert
         self.config = config or EngineConfig()
@@ -263,6 +266,26 @@ class DetectionEngine:
                 now_epoch=now_epoch,
             )
 
+        # Check if the user previously gave negative feedback on this base-model sound
+        if (
+            custom_match is None
+            and result.embedding is not None
+            and self.profile_store is not None
+            and hasattr(self.profile_store, "is_negative")
+        ):
+            try:
+                if self.profile_store.is_negative(result.embedding, category):
+                    return self._record_suppressed(
+                        result=result,
+                        category=category,
+                        confidence=confidence,
+                        priority=priority,
+                        custom_match=None,
+                        now_epoch=now_epoch,
+                    )
+            except Exception:
+                log.exception("Failed checking profile_store.is_negative for %s", category)
+
         if self._is_quiet_hours(settings.get("quiet_hours", {}), now_epoch):
             if not (self.config.critical_bypass_quiet_hours and priority == PRIORITY_CRITICAL):
                 return self._record_suppressed(
@@ -325,10 +348,13 @@ class DetectionEngine:
         if not settings.get("tv_guard", True) or priority == PRIORITY_CRITICAL:
             return 0.0
         ctx = result.context_scores or {}
+        # Experiment 5 finding: YAMNet's raw 'television' class score is ~0 even for TV audio.
+        # TV false alerts are driven by speech (17%) and music (13%), so TV guard
+        # triggers on speech and music scores (with television score as fallback).
         bg_score = max(
-            ctx.get(CONTEXT_TELEVISION, 0.0),
             ctx.get(CONTEXT_SPEECH, 0.0),
             ctx.get(CONTEXT_MUSIC, 0.0),
+            ctx.get(CONTEXT_TELEVISION, 0.0),
         )
         if bg_score >= self.config.tv_guard_context_min:
             return self.config.tv_guard_penalty

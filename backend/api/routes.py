@@ -68,7 +68,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
 async def put_settings(body: SettingsModel, request: Request) -> dict[str, Any]:
     runtime = _get_runtime(request)
     saved = runtime.store.save_settings(body.model_dump())
-    runtime.profile_store.set_method(saved["custom_method"])
+    runtime.sync_settings(saved)
     return saved
 
 
