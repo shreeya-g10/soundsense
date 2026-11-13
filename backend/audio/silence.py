@@ -9,7 +9,8 @@ window is ever skipped, but windows that *would* have been skipped are still
 counted, so Experiment 8 can compare both modes.
 
 Threshold:
-  - Fixed: ``SilenceGate(threshold=0.003)`` (about -50 dBFS, the default).
+  - Fixed: ``SilenceGate(threshold=0.008)`` (about -42 dBFS, the default;
+    the fallback when calibration is off).
   - Auto-calibrated: ``gate.start_calibration()`` measures ~2 s of ambient
     noise from the next windows, then sets
     ``threshold = ambient RMS x margin``, clamped to a safe range.
@@ -30,7 +31,7 @@ import numpy as np
 
 from backend.audio.capture import HOP_S, SAMPLE_RATE, WINDOW_S, rms
 
-DEFAULT_THRESHOLD = 0.003  # ~ -50 dBFS: quieter than a quiet room with a fan
+DEFAULT_THRESHOLD = 0.008  # ~ -42 dBFS: above typical laptop-mic room noise (~0.005)
 DEFAULT_MARGIN = 2.0  # calibrated threshold = ambient x 2 (~ +6 dB)
 CALIBRATION_S = 2.0
 MIN_THRESHOLD = 0.0005  # ~ -66 dBFS: never gate below this (dead-silent rooms)

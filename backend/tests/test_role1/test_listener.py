@@ -110,6 +110,7 @@ class FakeMic:
 
 def run_listener(windows, **kwargs) -> list[WindowResult]:
     got: list[WindowResult] = []
+    kwargs.setdefault("calibrate", False)  # fixed gate unless a test asks for calibration
     listener = YamnetListener(got.append, **kwargs)
     listener._mic = FakeMic(listener._on_capture, windows)
     listener.start()
@@ -187,6 +188,34 @@ def test_cpu_saver_off_never_skips(model):
     results = run_listener([silent(), silent()], cpu_saver=False)
     assert [w.skipped for w in results] == [False, False]
     assert all(len(w.category_scores) == 9 for w in results)
+
+
+def test_calibration_is_on_by_default():
+    params = inspect.signature(YamnetListener.__init__).parameters
+    assert params["calibrate"].default is True
+    assert YamnetListener(lambda w: None).calibrate is True
+
+
+def test_default_calibration_measures_first_windows_then_gates(model):
+    # Room noise at ~0.005 RMS (above the old 0.003 default): the first 3
+    # windows calibrate (never skipped), then the same noise is skipped.
+    rng = np.random.default_rng(0)
+    room = [(rng.standard_normal(WINDOW_SAMPLES) * 0.005).astype(np.float32) for _ in range(5)]
+    got: list[WindowResult] = []
+    listener = YamnetListener(got.append)
+    listener._mic = FakeMic(listener._on_capture, room + [loud()])
+    listener.start()
+    deadline = time.monotonic() + 30
+    while len(got) < 6 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    listener.stop()
+    assert [w.skipped for w in got] == [False, False, False, True, True, False]
+    assert listener.gate.threshold == pytest.approx(0.01, rel=0.1)
+
+
+def test_no_calibrate_uses_fixed_threshold(model):
+    results = run_listener([silent(), loud()], calibrate=False, threshold=0.02)
+    assert [w.skipped for w in results] == [True, False]
 
 
 def test_inference_runs_on_worker_thread(model):

@@ -6,7 +6,7 @@ Run from the repo root:
 
     python -m backend.ml.demo_yamnet path/to/sound.wav     # classify a file
     python -m backend.ml.demo_yamnet --live                # mic + silence gate
-    python -m backend.ml.demo_yamnet --live --calibrate --seconds 0
+    python -m backend.ml.demo_yamnet --live --seconds 0
     python -m backend.ml.demo_yamnet --benchmark           # avg inference ms per window
 
 The first run downloads YAMNet into data/models/ (git-ignored). Live audio is
@@ -75,7 +75,7 @@ def classify_file(path: str) -> None:
 def live(args: argparse.Namespace) -> None:
     model = YamnetModel.instance()
     gate = SilenceGate(threshold=args.threshold)
-    if args.calibrate:
+    if not args.no_calibrate:
         gate.start_calibration()
     times: list[float] = []
 
@@ -131,7 +131,8 @@ def main() -> None:
     parser.add_argument("--device", default=None, help="input device index or name (live)")
     parser.add_argument("--seconds", type=float, default=15, help="live duration; 0 = until Ctrl+C")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="silence gate threshold")
-    parser.add_argument("--calibrate", action="store_true", help="calibrate the silence gate first (live)")
+    parser.add_argument("--no-calibrate", action="store_true",
+                        help="live: use the fixed --threshold instead of calibrating from room noise")
     args = parser.parse_args()
     if isinstance(args.device, str) and args.device.isdigit():
         args.device = int(args.device)

@@ -33,6 +33,12 @@ def test_default_threshold_is_sensible():
     assert MIN_THRESHOLD < DEFAULT_THRESHOLD < MAX_THRESHOLD
 
 
+def test_default_threshold_skips_typical_room_noise():
+    # Laptop mic at ~65% input volume: room noise around 0.005 RMS.
+    assert DEFAULT_THRESHOLD == pytest.approx(0.008)
+    assert SilenceGate().check(noise(0.005)).skipped
+
+
 def test_silent_array_is_skipped():
     gate = SilenceGate()
     d = gate.check(np.zeros(WINDOW_SAMPLES, dtype=np.float32))

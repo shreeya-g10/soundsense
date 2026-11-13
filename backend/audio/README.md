@@ -13,7 +13,7 @@ Microphone capture (sounddevice) and audio preprocessing (Librosa). Audio stays 
 
 ## Part S2: silence gate / CPU saver (`silence.py`)
 
-- `SilenceGate(threshold=0.003, enabled=True, margin=2.0)`: `gate.check(samples)` returns `GateDecision(skipped, rms, calibrating)`. Below the threshold, the window is skipped and YAMNet won't run.
+- `SilenceGate(threshold=0.008, enabled=True, margin=2.0)`: `gate.check(samples)` returns `GateDecision(skipped, rms, calibrating)`. Below the threshold, the window is skipped and YAMNet won't run.
 - `enabled` is the `cpu_saver` setting. When it's off, nothing is skipped, but quiet windows are still counted as `below_threshold`.
 - Auto-calibration: `gate.start_calibration()` measures the next ~2 s (3 windows) of room noise and sets `threshold = ambient RMS x margin`, clamped to 0.0005–0.05. Calibration windows are never skipped. `gate.calibrate(clip)` does the same from an array.
 - `gate.stats()` returns `total`, `skipped`, `active`, `below_threshold`, `skip_rate`, `threshold` and `enabled` for Experiment 8. `reset_stats()` clears the counts.
@@ -24,8 +24,8 @@ Demo (from the repo root, nothing is saved):
 python -m backend.audio.demo_capture                # 15 s live meter
 python -m backend.audio.demo_capture --list-devices
 python -m backend.audio.demo_capture --device 0 --seconds 0   # until Ctrl+C
-python -m backend.audio.demo_capture --calibrate               # S2: calibrate threshold from room noise
-python -m backend.audio.demo_capture --threshold 0.01
+python -m backend.audio.demo_capture                           # S2: calibrates threshold from room noise
+python -m backend.audio.demo_capture --no-calibrate --threshold 0.01
 python -m backend.audio.demo_capture --no-cpu-saver            # S2: gate off, nothing skipped
 ```
 
@@ -33,7 +33,7 @@ Tests: `python -m pytest backend/tests/test_role1`
 
 ## Part S4: the real AudioListener (`listener.py`)
 
-`YamnetListener(on_window, device=None, *, room="Laptop", cpu_saver=True, threshold=0.003, calibrate=False, profile_store=None)` implements `contracts.types.AudioListener`:
+`YamnetListener(on_window, device=None, *, room="Laptop", cpu_saver=True, threshold=0.008, calibrate=True, profile_store=None)` implements `contracts.types.AudioListener`:
 
 mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread (YAMNet + category map) → `on_window(WindowResult)`
 
@@ -43,4 +43,4 @@ mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread
 - `listener.gate.enabled` is the `cpu_saver` setting. `listener.stats()` returns the gate counts plus dropped windows and mic overflows.
 - `profile_store`: if it has `match(embedding)` (the real `YamnetProfileStore` from S5 does), `custom_matches` is filled on every active window. If matching fails, the window is still delivered with `custom_matches=[]`.
 
-Demo: `python -m backend.audio.demo_listener [--calibrate] [--seconds 0] [--no-cpu-saver]`
+Demo: `python -m backend.audio.demo_listener [--no-calibrate] [--seconds 0] [--no-cpu-saver]`

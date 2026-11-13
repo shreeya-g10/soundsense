@@ -53,7 +53,7 @@ class YamnetListener:
         room: str = "Laptop",
         cpu_saver: bool = True,
         threshold: float = DEFAULT_THRESHOLD,
-        calibrate: bool = False,
+        calibrate: bool = True,
         profile_store: ProfileStore | None = None,
     ) -> None:
         """Create the listener. Does not open the mic or load the model yet.
@@ -65,9 +65,10 @@ class YamnetListener:
             room: Value for WindowResult.room.
             cpu_saver: Initial silence-gate state (settings "cpu_saver").
                 Change later with ``listener.gate.enabled``.
-            threshold: Silence-gate RMS threshold.
+            threshold: Silence-gate RMS threshold. With calibration on, it
+                only applies until the first ~2 s have been measured.
             calibrate: Measure ~2 s of room noise at each start() and set the
-                threshold from it.
+                threshold from it (default). False = fixed ``threshold``.
             profile_store: Custom-sound store. If it has a
                 ``match(embedding) -> list[CustomMatch]`` method (the real
                 YamnetProfileStore does), it fills custom_matches on every

@@ -17,7 +17,7 @@ Demo (from the repo root):
 ```bash
 python -m backend.ml.demo_yamnet path/to/sound.wav       # classify a file (any format soundfile reads)
 python -m backend.ml.demo_yamnet --live                  # mic + silence gate, top 3 per active window
-python -m backend.ml.demo_yamnet --live --calibrate --seconds 0
+python -m backend.ml.demo_yamnet --live --seconds 0
 python -m backend.ml.demo_yamnet --benchmark             # average inference time per window
 ```
 

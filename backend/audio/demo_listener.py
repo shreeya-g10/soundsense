@@ -5,7 +5,8 @@ Owner: Shreeya (Role 1).
 Run from the repo root:
 
     python -m backend.audio.demo_listener                 # 30 s
-    python -m backend.audio.demo_listener --calibrate --seconds 0
+    python -m backend.audio.demo_listener --seconds 0
+    python -m backend.audio.demo_listener --no-calibrate --threshold 0.01
     python -m backend.audio.demo_listener --no-cpu-saver
 
 Audio is never saved.
@@ -39,7 +40,8 @@ def main() -> None:
     parser.add_argument("--device", default=None, help="input device index or name")
     parser.add_argument("--seconds", type=float, default=30, help="duration; 0 = until Ctrl+C")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="silence gate threshold")
-    parser.add_argument("--calibrate", action="store_true", help="calibrate the silence gate from room noise")
+    parser.add_argument("--no-calibrate", action="store_true",
+                        help="use the fixed --threshold instead of calibrating from room noise")
     parser.add_argument("--no-cpu-saver", action="store_true", help="never skip windows")
     args = parser.parse_args()
     device = int(args.device) if isinstance(args.device, str) and args.device.isdigit() else args.device
@@ -49,7 +51,7 @@ def main() -> None:
         device=device,
         cpu_saver=not args.no_cpu_saver,
         threshold=args.threshold,
-        calibrate=args.calibrate,
+        calibrate=not args.no_calibrate,
     )
     try:
         listener.start()

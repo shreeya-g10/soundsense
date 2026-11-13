@@ -4,9 +4,9 @@ Owner: Shreeya (Role 1).
 
 Run from the repo root:
 
-    python -m backend.audio.demo_capture                  # 15 s, default mic, fixed threshold
-    python -m backend.audio.demo_capture --calibrate      # measure ~2 s of room noise first
-    python -m backend.audio.demo_capture --threshold 0.01
+    python -m backend.audio.demo_capture                  # 15 s, default mic, calibrates from ~2 s of room noise
+    python -m backend.audio.demo_capture --no-calibrate   # fixed default threshold
+    python -m backend.audio.demo_capture --no-calibrate --threshold 0.01
     python -m backend.audio.demo_capture --no-cpu-saver   # gate off: nothing is skipped
     python -m backend.audio.demo_capture --seconds 0      # until Ctrl+C
     python -m backend.audio.demo_capture --list-devices
@@ -39,7 +39,8 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, default=15, help="how long to run; 0 = until Ctrl+C")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
                         help=f"silence RMS threshold (default {DEFAULT_THRESHOLD})")
-    parser.add_argument("--calibrate", action="store_true", help="set the threshold from ~2 s of ambient noise")
+    parser.add_argument("--no-calibrate", action="store_true",
+                        help="use the fixed --threshold instead of measuring ~2 s of ambient noise")
     parser.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
                         help=f"calibration margin: threshold = ambient x margin (default {DEFAULT_MARGIN})")
     parser.add_argument("--no-cpu-saver", action="store_true", help="disable the gate (never skip)")
@@ -51,7 +52,7 @@ def main() -> None:
         return
 
     gate = SilenceGate(threshold=args.threshold, enabled=not args.no_cpu_saver, margin=args.margin)
-    if args.calibrate:
+    if not args.no_calibrate:
         gate.start_calibration()
 
     count = 0
@@ -84,7 +85,7 @@ def main() -> None:
     except RuntimeError as exc:
         raise SystemExit(f"{exc}\nTry --list-devices, and check the terminal has microphone permission.")
 
-    mode = "calibrating for ~2 s" if args.calibrate else f"threshold {gate.threshold:.4f}"
+    mode = "calibrating for ~2 s" if not args.no_calibrate else f"threshold {gate.threshold:.4f}"
     print(
         f"Listening at {mic.device_rate:g} Hz -> {SAMPLE_RATE} Hz mono, {WINDOW_SAMPLES}-sample windows "
         f"every {HOP_S}s. CPU saver {'ON' if gate.enabled else 'OFF'} ({mode}). Ctrl+C to stop.\n"
