@@ -262,3 +262,35 @@ def test_validation_errors_and_mic_failure(client) -> None:
     status = tc.get("/api/status").json()
     assert status["mic_ok"] is False
     assert status["monitoring"] is False
+
+
+def test_real_classes_wiring_and_sync_settings(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "wiring.db"
+    profiles_path = tmp_path / "profiles"
+    monkeypatch.setenv("SOUNDSENSE_DB_PATH", str(db_path))
+
+    from backend.audio.listener import YamnetListener
+    from backend.audio.remote_input import YamnetRemoteInput
+    from backend.custom.profile_store import YamnetProfileStore
+
+    store = YamnetProfileStore(root=profiles_path)
+    rt = BackendRuntime(profile_store=store, enable_notifications=False)
+    rt.listener = YamnetListener(rt.engine.on_window, profile_store=store)
+    rt.remote_audio = YamnetRemoteInput(rt.engine.on_window, profile_store=store)
+
+    assert isinstance(rt.listener, YamnetListener)
+    assert isinstance(rt.profile_store, YamnetProfileStore)
+    assert isinstance(rt.remote_audio, YamnetRemoteInput)
+
+    # Test sync_settings propagates cpu_saver to listener and remote input gates
+    assert rt.listener.gate.enabled is True
+    rt.sync_settings({"custom_method": "mfcc", "cpu_saver": False})
+    assert rt.listener.gate.enabled is False
+    assert rt.remote_audio.cpu_saver is False
+    assert rt.profile_store.method == "mfcc"
+
+    app = create_app(runtime=rt)
+    with TestClient(app) as tc:
+        resp = tc.get("/api/status")
+        assert resp.status_code == 200
+        assert resp.json()["mic_ok"] is True

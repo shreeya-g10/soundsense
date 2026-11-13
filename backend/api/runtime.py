@@ -58,6 +58,10 @@ class FakeRemoteAudioInput:
             )
         )
 
+    def close(self) -> None:
+        """No-op close to match RemoteAudioInput lifecycle."""
+        pass
+
 
 class BackendRuntime:
     """Holds shared backend state and lifecycle for FastAPI routes and WebSockets."""
@@ -72,9 +76,27 @@ class BackendRuntime:
         dispatcher: AlertDispatcher | None = None,
         engine_config: EngineConfig | None = None,
         enable_notifications: bool = True,
+        use_fakes: bool | None = None,
     ) -> None:
         self.store = store or SQLiteStore(os.getenv("SOUNDSENSE_DB_PATH", "soundsense.db"))
-        self.profile_store: ProfileStore = profile_store or FakeProfileStore()
+        saved_settings = self.store.get_settings()
+        cpu_saver = bool(saved_settings.get("cpu_saver", True))
+
+        if use_fakes is None:
+            use_fakes = os.getenv("SOUNDSENSE_USE_FAKES", "false").lower() in ("1", "true", "yes")
+
+        if profile_store is not None:
+            self.profile_store: ProfileStore = profile_store
+        elif use_fakes:
+            self.profile_store = FakeProfileStore()
+        else:
+            try:
+                from backend.custom.profile_store import YamnetProfileStore
+                self.profile_store = YamnetProfileStore()
+            except Exception as exc:
+                log.warning("Could not initialize YamnetProfileStore (%s); falling back to FakeProfileStore", exc)
+                self.profile_store = FakeProfileStore()
+
         self.metrics = ProcessMetrics()
 
         if dispatcher is not None:
@@ -87,6 +109,7 @@ class BackendRuntime:
 
         self.engine = DetectionEngine(
             store=self.store,
+            profile_store=self.profile_store,
             on_level=self._on_level_from_thread,
             on_alert=self._on_alert_from_thread,
             config=engine_config,
@@ -94,7 +117,7 @@ class BackendRuntime:
 
         if listener is not None:
             self.listener: AudioListener = listener
-        else:
+        elif use_fakes:
             scenario = os.getenv("SOUNDSENSE_FAKE_SCENARIO", "whistles")
             loop = os.getenv("SOUNDSENSE_FAKE_LOOP", "false").lower() in ("1", "true", "yes")
             self.listener = FakeListener(
@@ -102,10 +125,33 @@ class BackendRuntime:
                 scenario=scenario,
                 loop=loop,
             )
+        else:
+            try:
+                from backend.audio.listener import YamnetListener
+                self.listener = YamnetListener(
+                    self.engine.on_window,
+                    profile_store=self.profile_store,
+                    cpu_saver=cpu_saver,
+                )
+            except Exception as exc:
+                log.warning("Could not initialize YamnetListener (%s); falling back to FakeListener", exc)
+                self.listener = FakeListener(on_window=self.engine.on_window, scenario="whistles")
 
-        self.remote_audio: RemoteAudioInput = remote_audio or FakeRemoteAudioInput(
-            on_window=self.engine.on_window
-        )
+        if remote_audio is not None:
+            self.remote_audio: RemoteAudioInput = remote_audio
+        elif use_fakes:
+            self.remote_audio = FakeRemoteAudioInput(on_window=self.engine.on_window)
+        else:
+            try:
+                from backend.audio.remote_input import YamnetRemoteInput
+                self.remote_audio = YamnetRemoteInput(
+                    self.engine.on_window,
+                    profile_store=self.profile_store,
+                    cpu_saver=cpu_saver,
+                )
+            except Exception as exc:
+                log.warning("Could not initialize YamnetRemoteInput (%s); falling back to FakeRemoteAudioInput", exc)
+                self.remote_audio = FakeRemoteAudioInput(on_window=self.engine.on_window)
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._started_at: float | None = None
@@ -114,12 +160,28 @@ class BackendRuntime:
         self._live_clients: set[WebSocket] = set()
         self._listener_clients: dict[WebSocket, str] = {}
 
-        # Sync initial custom_method from stored settings to profile_store
+        self.sync_settings(saved_settings)
+
+    # ------------------------------------------------------------------
+    # Settings synchronization
+    # ------------------------------------------------------------------
+
+    def sync_settings(self, settings: dict[str, Any]) -> None:
+        """Sync dynamic settings to listener, profile store, and remote audio."""
+        method = settings.get("custom_method", "embedding")
         try:
-            method = self.store.get_settings().get("custom_method", "embedding")
             self.profile_store.set_method(method)
         except Exception:
-            log.exception("Failed syncing initial custom_method")
+            log.exception("Failed syncing custom_method to profile store")
+
+        cpu_saver = bool(settings.get("cpu_saver", True))
+        if hasattr(self.listener, "gate") and hasattr(self.listener.gate, "enabled"):
+            self.listener.gate.enabled = cpu_saver
+        if hasattr(self.remote_audio, "cpu_saver"):
+            self.remote_audio.cpu_saver = cpu_saver
+            for r in getattr(self.remote_audio, "_rooms", {}).values():
+                if hasattr(r, "gate"):
+                    r.gate.enabled = cpu_saver
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -135,6 +197,11 @@ class BackendRuntime:
             self.listener.stop()
         except Exception:
             log.exception("Error stopping listener")
+        if hasattr(self.remote_audio, "close"):
+            try:
+                self.remote_audio.close()
+            except Exception:
+                log.exception("Error closing remote audio input")
         self._started_at = None
         self.engine.stop()
         self.dispatcher.stop()
