@@ -72,7 +72,9 @@ class YamnetListener:
             profile_store: Custom-sound store. If it has a
                 ``match(embedding) -> list[CustomMatch]`` method (the real
                 YamnetProfileStore does), it fills custom_matches on every
-                active window.
+                active window. If it has ``add_background(embedding,
+                source=)``, the calibration windows' embeddings (room noise)
+                are added to its background bank.
         """
         self._on_window = on_window
         self.room = room
@@ -202,6 +204,16 @@ class YamnetListener:
             log.exception("Custom-sound matching failed; continuing without matches")
             return []
 
+    def _add_background(self, embedding: np.ndarray) -> None:
+        """Calibration windows are room noise: feed them to the store's background bank."""
+        add = getattr(self.profile_store, "add_background", None)
+        if add is None:
+            return
+        try:
+            add(embedding, source="calibration")
+        except Exception:
+            log.exception("Could not add calibration window to the background bank")
+
     def _analyse(self, samples: np.ndarray, timestamp: float, decision) -> WindowResult:
         if decision.skipped:
             return WindowResult(
@@ -216,6 +228,8 @@ class YamnetListener:
                 room=self.room,
             )
         out = self._model.infer(samples)
+        if decision.calibrating:
+            self._add_background(out.embedding)
         return WindowResult(
             timestamp=timestamp,
             rms=decision.rms,

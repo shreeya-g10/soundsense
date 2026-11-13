@@ -352,3 +352,21 @@ def test_demo_listener_passes_real_yamnet_top3(model):
     assert [s for _, s in top1] == sorted((s for _, s in top1), reverse=True)
     expected = yamnet.top_k(model.infer(loud()).scores, 3)
     assert [n for n, _ in top1] == [n for n, _ in expected]
+
+
+def test_calibration_windows_feed_the_background_bank(model):
+    class Store:
+        def __init__(self):
+            self.background = []
+
+        def match(self, embedding):
+            return []
+
+        def add_background(self, embedding, source):
+            self.background.append((source, len(embedding)))
+
+    store = Store()
+    rng = np.random.default_rng(1)
+    room = [(rng.standard_normal(WINDOW_SAMPLES) * 0.005).astype(np.float32) for _ in range(5)]
+    run_listener(room + [loud()], calibrate=True, profile_store=store)
+    assert store.background == [("calibration", EMBEDDING_SIZE)] * 3  # only the 3 calibration windows
