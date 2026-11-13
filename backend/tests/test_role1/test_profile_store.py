@@ -252,3 +252,57 @@ def test_listener_fills_custom_matches(tmp_path):
     no_store = YamnetListener(lambda w: None)
     no_store._load_model()
     assert no_store._analyse(window, 0.0, GateDecision(skipped=False, rms=0.2)).custom_matches == []
+
+
+# --- demo_profiles helpers (S5e) -------------------------------------------
+
+def _window(skipped: bool = False):
+    from contracts.types import WindowResult
+
+    return WindowResult(timestamp=1000.0, rms=0.0 if skipped else 0.05, skipped=skipped,
+                        category_scores={}, context_scores={}, embedding=None,
+                        custom_matches=[], inference_ms=0.0, room="Laptop")
+
+
+def test_demo_resolve_profile_by_id_or_name(store):
+    from backend.custom.demo_profiles import resolve_profile
+
+    pid = store.create("My Kitchen Cooker", "pressure_cooker")
+    store.create("Doorbell", "doorbell")
+    assert resolve_profile(store, pid)["id"] == pid
+    assert resolve_profile(store, "my kitchen cooker")["id"] == pid
+    with pytest.raises(SystemExit, match="--list"):
+        resolve_profile(store, "nope")
+    store.create("Doorbell", "doorbell")
+    with pytest.raises(SystemExit, match="pass the id"):
+        resolve_profile(store, "Doorbell")
+
+
+def test_demo_format_profiles(store):
+    from backend.custom.demo_profiles import format_profiles
+
+    assert format_profiles([]) == "No saved profiles."
+    pid = store.create("Cooker", "pressure_cooker")
+    store.add_example_from_audio(pid, tone(440))
+    lines = format_profiles(store.list()).splitlines()
+    assert lines[0].split() == ["ID", "NAME", "CATEGORY", "EXAMPLES"]
+    assert lines[1].split() == [pid, "Cooker", "pressure_cooker", str(store.list()[0]["examples"])]
+
+
+def test_demo_line_shows_top_yamnet_class():
+    from backend.custom.demo_profiles import format_line
+
+    line = format_line(_window(), 0.84, True, [("Steam", 0.41), ("Hiss", 0.2)])
+    assert "similarity 0.84 MATCH  [Steam 0.41]" in line
+    assert "MATCH" not in format_line(_window(), 0.3, False, [("Speech", 0.9)])
+    assert format_line(_window(skipped=True), None, False, []).endswith("skipped")
+
+
+def test_demo_live_summary():
+    from backend.custom.demo_profiles import LiveSummary
+
+    assert "no windows tested" in str(LiveSummary())
+    s = LiveSummary()
+    for sim, hit in [(0.9, True), (0.5, False), (0.7, False)]:
+        s.add(sim, hit)
+    assert str(s) == "Summary: 3 windows tested, 1 matches (33%), similarity max 0.90, mean 0.70"

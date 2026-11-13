@@ -15,4 +15,7 @@ User-taught custom sounds: embedding extraction and matching (scikit-learn). Emb
 - **Methods:** `set_method("mfcc")` is accepted and saved, but matching still uses embeddings until MFCC is implemented.
 - **What 0.80 separates** (real YAMNet embeddings): enrolled speech vs the same file 0.92, another voice 0.84, chimes 0.13–0.55. It separates *kinds* of sound well. Two similar sounds can still match each other.
 
-Demo: `python -m backend.custom.demo_profiles [--name ... --category ...] [--from-wav file] [--keep]`. It records 5 × 3 s examples, then live-tests and shows the similarity per window. The demo profile is deleted unless `--keep` is given.
+Demo: `python -m backend.custom.demo_profiles [--name ... --category ...] [--from-wav file] [--keep] [--seconds 60]`. It records 5 × 3 s examples (`--examples`, `--record-seconds`), then live-tests for `--seconds` (default 60; 0 = until Ctrl+C). Each line shows the similarity, MATCH, and the window's top YAMNet class, e.g. `similarity 0.84 MATCH  [Steam 0.41]`. A summary at the end shows windows tested, matches, and max/mean similarity. The new profile is deleted unless `--keep` is given.
+
+- `--list` prints saved profiles (id, name, category, examples).
+- `--test <id or name>` skips recording and live-tests a saved profile. It never deletes that profile.
