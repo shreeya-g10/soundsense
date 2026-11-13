@@ -221,8 +221,11 @@ def test_delete_removes_files(tmp_path, store):
 
 def test_base_model_feedback_saved(tmp_path, store):
     store.add_feedback(base_vector().tolist(), "smoke_alarm", None, positive=False)
+    store.add_feedback(base_vector().tolist(), "doorbell", None, positive=True)
+    with np.load(tmp_path / "category_negatives.npz") as npz:  # S6
+        assert npz.files == ["smoke_alarm"] and npz["smoke_alarm"].shape == (1, EMBEDDING_SIZE)
     with np.load(tmp_path / "feedback.npz") as npz:
-        assert npz["smoke_alarm_negative"].shape == (1, EMBEDDING_SIZE)
+        assert npz.files == ["doorbell_positive"]
 
 
 # --- listener integration (real YAMNet) -------------------------------
@@ -613,3 +616,207 @@ def test_default_threshold_falls_back_to_raw_while_bank_is_empty(tmp_path):
     assert fixed.effective_threshold == 0.95  # explicit threshold is never changed
     fixed.scoring = "raw"
     assert fixed.threshold == 0.95
+
+
+# --- S6: feedback ------------------------------------------------------------
+
+def test_positive_feedback_appends_to_positives(tmp_path):
+    store = make_store(tmp_path, scoring="raw", threshold=0.99, top_k=1)  # sound(1)~sound(2) raw cosine 0.97
+    pid = store.create("Bell", "doorbell")
+    store.add_feedback(sound(1).tolist(), "doorbell", pid, positive=True)
+    assert store.list()[0]["examples"] == 1
+    assert not store.match(sound(2))
+    store.add_feedback(sound(2).tolist(), "doorbell", pid, positive=True)
+    assert store.list()[0]["examples"] == 2
+    assert [m.profile_id for m in store.match(sound(2))] == [pid]
+
+
+def test_negative_feedback_blocks_windows_closer_to_negatives(tmp_path):
+    for scoring in ("raw", "centered"):
+        store = make_store(tmp_path / scoring, scoring=scoring, threshold=0.5)
+        store.add_background(np.stack([sound(600 + i, 0.3) for i in range(5)]), source="room")
+        pid = store.create("Cooker", "pressure_cooker")
+        cooker, kettle = sound(1), 0.7 * sound(1) + 0.3 * sound(2)
+        for i in range(3):
+            store.add_feedback((cooker + 0.05 * i).tolist(), "pressure_cooker", pid, positive=True)
+        assert [m.profile_id for m in store.match(kettle)] == [pid]  # kettle matches at first...
+
+        for i in range(3):  # ...until the user marks it as a false alert
+            store.add_feedback((kettle + 0.05 * i).tolist(), "pressure_cooker", pid, positive=False)
+        d = store.score(pid, kettle)
+        assert d.similarity >= 0.5 and d.negative > d.similarity and not d.matched, scoring
+        assert store.match(kettle) == []
+        d = store.score(pid, cooker)  # the real cooker is still closer to the positives
+        assert d.matched and d.similarity > d.negative, scoring
+        assert len(store._profiles[pid].negative) == 3 and store.list()[0]["examples"] == 3
+
+
+def test_profile_negatives_persist(tmp_path):
+    s1 = make_store(tmp_path, scoring="raw", threshold=0.5)
+    pid = s1.create("Cooker", "pressure_cooker")
+    s1.add_feedback(sound(1).tolist(), "pressure_cooker", pid, positive=True)
+    s1.add_feedback(sound(2).tolist(), "pressure_cooker", pid, positive=False)
+    s2 = make_store(tmp_path, scoring="raw", threshold=0.5)
+    assert s2.score(pid, sound(2)).negative == pytest.approx(s1.score(pid, sound(2)).negative)
+    assert not s2.score(pid, sound(2)).matched
+
+
+def test_category_negatives_and_is_negative(tmp_path):
+    store = make_store(tmp_path, scoring="raw")
+    alarm_clock = sound(1)
+    assert store.is_negative(alarm_clock, "smoke_alarm") is False  # no feedback yet
+    store.add_feedback(alarm_clock.tolist(), "smoke_alarm", None, positive=False)
+    store.add_feedback((alarm_clock + 0.05).tolist(), "smoke_alarm", None, positive=False)
+
+    assert store.is_negative(alarm_clock + 0.02, "smoke_alarm") is True
+    assert store.is_negative(sound(50, 3.0) - COMMON, "smoke_alarm") is False  # a different sound
+    assert store.is_negative(alarm_clock, "doorbell") is False  # negatives are per category
+    with pytest.raises(ValueError):
+        store.is_negative(alarm_clock, "nope")
+    with np.load(tmp_path / "category_negatives.npz") as npz:
+        assert npz.files == ["smoke_alarm"] and npz["smoke_alarm"].shape == (2, EMBEDDING_SIZE)
+    assert store.category_negative_counts() == {"smoke_alarm": 2}
+
+    reloaded = make_store(tmp_path, scoring="raw")
+    assert reloaded.is_negative(alarm_clock + 0.02, "smoke_alarm") is True
+
+
+def test_is_negative_false_when_closer_to_correct_alerts(tmp_path):
+    store = make_store(tmp_path, scoring="raw", threshold=0.5)
+    real_alarm, clock = sound(1), 0.6 * sound(1) + 0.4 * sound(2)
+    store.add_feedback(clock.tolist(), "smoke_alarm", None, positive=False)
+    store.add_feedback(real_alarm.tolist(), "smoke_alarm", None, positive=True)
+    assert store.is_negative(clock, "smoke_alarm") is True
+    assert store.is_negative(real_alarm, "smoke_alarm") is False  # similar to a negative, but a known-correct alert
+
+
+# --- S6: MFCC baseline -------------------------------------------------------
+
+class NoModel:
+    def infer(self, samples):
+        raise AssertionError("MFCC profiles must not run YAMNet")
+
+
+def noise_audio(seconds: float = 3.0, amp: float = 0.2, seed: int = 0) -> np.ndarray:
+    return (np.random.default_rng(seed).standard_normal(int(seconds * SAMPLE_RATE)) * amp).astype(np.float32)
+
+
+def test_mfcc_vector_is_mean_and_std_of_20_mfccs():
+    import librosa
+
+    from backend.custom.profile_store import MFCC_SIZE, mfcc_vector
+
+    w = tone(440, 0.96)[:WINDOW_SAMPLES]
+    v = mfcc_vector(w)
+    m = librosa.feature.mfcc(y=w, sr=SAMPLE_RATE, n_mfcc=20)
+    assert v.shape == (MFCC_SIZE,) == (40,) and v.dtype == np.float32
+    np.testing.assert_allclose(v[:20], m.mean(axis=1), rtol=1e-5, atol=1e-4)
+    np.testing.assert_allclose(v[20:], m.std(axis=1), rtol=1e-5, atol=1e-4)
+
+
+def test_set_method_mfcc_builds_new_profiles_with_mfcc(tmp_path):
+    store = YamnetProfileStore(tmp_path, model=NoModel(), mfcc_threshold=0.9)
+    store.set_method("mfcc")
+    pid = store.create("Whistle", "pressure_cooker")
+    n = store.add_example_from_audio(pid, tone(1500, 3.0))
+    assert n > 0 and store.list()[0]["examples"] == n
+    with np.load(tmp_path / f"{pid}.npz") as npz:
+        assert sorted(npz.files) == ["mfcc_augmented", "mfcc_negative", "mfcc_positive"]
+        assert npz["mfcc_positive"].shape == (n, 40) and npz["mfcc_augmented"].shape == (3 * n, 40)
+    index = json.loads((tmp_path / "profiles.json").read_text())
+    assert index["method"] == "mfcc" and index["profiles"][0]["method"] == "mfcc"
+
+    w = tone(1500, 0.96)[:WINDOW_SAMPLES]
+    assert [m.profile_id for m in store.match(None, samples=w)] == [pid]
+    assert store.match(None, samples=noise_audio(0.96)[:WINDOW_SAMPLES]) == []
+    assert store.test_from_audio(pid, tone(1500, 2.0)) > 0.99
+
+
+def test_each_profile_keeps_its_own_method(tmp_path):
+    store = make_store(tmp_path, scoring="raw", threshold=0.9, mfcc_threshold=0.9)
+    emb = store.create("Emb", "doorbell")
+    store.add_example_from_audio(emb, tone(440, 3.0))
+    store.set_method("mfcc")
+    mf = store.create("Mfcc", "doorbell")
+    store.add_example_from_audio(mf, tone(440, 3.0))
+    explicit = store.create("Explicit", "doorbell", method="embedding")
+    assert [store._get(p).method for p in (emb, mf, explicit)] == ["embedding", "mfcc", "embedding"]
+    with pytest.raises(ValueError):
+        store.create("Bad", "doorbell", method="svm")
+
+    w = tone(440, 0.96)[:WINDOW_SAMPLES]
+    e = FakeModel().infer(w).embedding
+    assert [m.profile_id for m in store.match(e)] == [emb]  # MFCC needs the window's audio...
+    assert store.score(mf, e).similarity == 0.0
+    assert {m.profile_id for m in store.match(e, samples=w)} == {emb, mf}
+    assert store.score(mf, e).similarity > 0.99  # ...or a window seen by a recent match()
+    assert {m.profile_id for m in store.match(e)} == {emb, mf}
+    assert store.score(mf, FakeModel().infer(tone(441, 0.96)[:WINDOW_SAMPLES]).embedding).similarity == 0.0
+
+    reloaded = make_store(tmp_path, scoring="raw", threshold=0.9, mfcc_threshold=0.9)
+    assert reloaded.method == "mfcc"
+    assert [reloaded._get(p).method for p in (emb, mf)] == ["embedding", "mfcc"]
+    assert len(reloaded._get(mf).positive) == len(store._get(mf).positive)
+
+
+def test_mfcc_feedback_uses_the_windows_mfcc(tmp_path, caplog):
+    store = make_store(tmp_path, mfcc_threshold=0.5)
+    store.set_method("mfcc")
+    pid = store.create("Whistle", "pressure_cooker")
+    store.add_example_from_audio(pid, tone(1500, 3.0))
+    w = tone(1500, 0.96)[:WINDOW_SAMPLES]
+    e = FakeModel().infer(w).embedding
+    store.match(e, samples=w)  # what the listener does; the MFCC is remembered in memory
+    store.add_feedback(e.tolist(), "pressure_cooker", pid, positive=False)
+    p = store._get(pid)
+    assert p.negative.shape == (1, 40)
+
+    unseen = sound(5)
+    with caplog.at_level("WARNING"):
+        store.add_feedback(unseen.tolist(), "pressure_cooker", pid, positive=False)
+    assert "no longer known" in caplog.text
+    assert p.negative.shape == (1, 40) and p.get("negative", "embedding").shape == (1, EMBEDDING_SIZE)
+
+
+def test_mfcc_c0_dominates_without_dropping_it(tmp_path):
+    sims = {}
+    for drop in (True, False):
+        store = YamnetProfileStore(tmp_path / str(drop), model=NoModel(), mfcc_drop_c0=drop)
+        pid = store.create("Whistle", "pressure_cooker", method="mfcc")
+        store.add_example_from_audio(pid, tone(1500, 3.0))
+        sims[drop] = store.similarity(pid, None, samples=tone(300, 0.96, amp=0.3)[:WINDOW_SAMPLES])
+    assert sims[False] > sims[True]
+
+
+# --- S6: listener passes the window audio to match() -------------------------
+
+def test_analyse_window_passes_samples_only_to_stores_that_accept_them():
+    from backend.audio.listener import analyse_window
+
+    class Model:
+        def infer(self, samples):
+            return type("Out", (), {"scores": np.zeros(521, np.float32),
+                                     "embedding": np.ones(EMBEDDING_SIZE, np.float32), "inference_ms": 1.0})()
+
+    class Mapper:
+        def category_scores(self, scores):
+            return {}
+
+        def context_scores(self, scores):
+            return {}
+
+    seen = {}
+
+    class NewStore:
+        def match(self, embedding, samples=None):
+            seen["samples"] = samples
+            return [CustomMatch("p", "n", "doorbell", 0.9)]
+
+    class OldStore:
+        def match(self, embedding):
+            return []
+
+    w = tone(440, 0.96)[:WINDOW_SAMPLES]
+    r = analyse_window(Model(), Mapper(), NewStore(), w, 1.0, GateDecision(False, 0.2), "Kitchen")
+    assert seen["samples"] is w and r.custom_matches[0].profile_id == "p" and r.room == "Kitchen"
+    assert analyse_window(Model(), Mapper(), OldStore(), w, 1.0, GateDecision(False, 0.2), "Hall").custom_matches == []

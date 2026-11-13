@@ -13,6 +13,7 @@ Run from the repo root:
     python -m backend.custom.demo_profiles --test "My Kitchen Cooker" --test-wav data/indian/test/
     python -m backend.custom.demo_profiles --record-test cooker  # record a test WAV (with consent)
     python -m backend.custom.demo_profiles --scoring raw --no-augment   # Experiment 6 comparisons
+    python -m backend.custom.demo_profiles --method mfcc        # S6 MFCC baseline profile
 
 Enrolment: the examples are recorded into memory first, then 5 s of normal
 room sound (no target sound). The room sound goes into the background bank,
@@ -221,7 +222,7 @@ def evaluate_audio(store: YamnetProfileStore, pid: str, audio: np.ndarray, path:
         if names is not None and getattr(out, "scores", None) is not None:
             i = int(np.argmax(out.scores))
             top = [(names[i], float(out.scores[i]))]
-        windows.append(WindowEval(start_s, store.score(pid, out.embedding), top))
+        windows.append(WindowEval(start_s, store.score(pid, out.embedding, samples=w), top))
     return FileEval(path, windows, total)
 
 
@@ -362,6 +363,9 @@ def main() -> None:
                              f"{THRESHOLDS[SCORING_RAW]} raw)")
     parser.add_argument("--no-margin", action="store_true", help="don't require beating the background score")
     parser.add_argument("--no-augment", action="store_true", help="store recorded windows only")
+    parser.add_argument("--method", choices=["embedding", "mfcc"], default=None,
+                        help="features for the NEW profile (default: the store's method); "
+                             "doesn't change the saved setting")
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="profile folder")
     parser.add_argument("--keep", action="store_true", help="keep the new profile after the demo")
     args = parser.parse_args()
@@ -395,8 +399,8 @@ def main() -> None:
 
     try:
         if not args.test:
-            pid = created = store.create(args.name, args.category)
-            print(f"Created profile {pid}: {args.name!r} ({args.category})")
+            pid = created = store.create(args.name, args.category, method=args.method)
+            print(f"Created profile {pid}: {args.name!r} ({args.category}, {store._get(pid).method})")
             if args.keep:
                 print("It will be kept (--keep).\n")
             else:
@@ -404,8 +408,12 @@ def main() -> None:
             enrol(store, pid, args)
 
         rule = "" if args.no_margin else " and above the background score"
-        print(f"\nScoring {store.scoring}, match = similarity >= {store.effective_threshold:.2f}{rule}. "
-              f"Background bank: {store.background_size()} embeddings.")
+        if store._get(pid).method == "mfcc":
+            print(f"\nMFCC baseline, match = similarity >= {store.threshold_for(pid):.3f} "
+                  f"(no centering or background margin).")
+        else:
+            print(f"\nScoring {store.scoring}, match = similarity >= {store.threshold_for(pid):.2f}{rule}. "
+                  f"Background bank: {store.background_size()} embeddings.")
         if wav_files is not None:
             results = evaluate_paths(store, pid, wav_files, store._get_model())
             print(f"\n{overall_summary(results)}")

@@ -44,3 +44,16 @@ mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread
 - `profile_store`: if it has `match(embedding)` (the real `YamnetProfileStore` from S5 does), `custom_matches` is filled on every active window. If matching fails, the window is still delivered with `custom_matches=[]`.
 
 Demo: `python -m backend.audio.demo_listener [--no-calibrate] [--seconds 0] [--no-cpu-saver]`
+
+## Part S6: RemoteAudioInput (`remote_input.py`, Phase 5)
+
+`YamnetRemoteInput(on_window, *, profile_store=None, cpu_saver=True, threshold=0.008, calibrate=True)` implements `contracts.types.RemoteAudioInput`.
+- **Calling it:** Vaidehi's `/ws/listener` handler calls `remote.push(frame_bytes, room)` once per binary frame. The frame is little-endian Float32 mono 16 kHz audio of any length that's a multiple of 4 bytes; anything else raises `ValueError`. `push()` only decodes the bytes and queues them, so it's safe inside an async handler.
+- **Processing:** one "RemoteAudioInput" worker thread starts on the first push. It buffers each room separately, cuts 0.96 s windows every 0.48 s (50% overlap) and runs the same pipeline as `YamnetListener` (`listener.analyse_window`): silence gate, YAMNet, category mapping and custom matching. The results arrive at `on_window` as `WindowResult(room=room)`.
+- **Silence gate per room:** each room has its own gate, calibrated from that room's first ~2 s. Use `remote.gate(room)` to reach it. Calibration windows also go into the background bank.
+- **Timestamps:** a window's timestamp is the arrival time of the chunk that completed it, minus the audio that came after the window's end. It is kept monotonic per room.
+- **Falling behind:** if analysis falls ~32 s behind (64 queued chunks), the oldest chunk is dropped (counted in `dropped_chunks`) and that room's buffer restarts, so no window spans a gap.
+- **Stopping:** `remote.close()` blocks until queued chunks are analysed and `on_window` won't be called again. A later push starts a new worker. `remote.stats()` gives per-room gate counts and `dropped_chunks`. `remote.error` is set if YAMNet fails to load.
+- **Privacy:** audio is processed in memory only and never saved.
+
+The listener now passes each window's audio, in memory only, to `profile_store.match(embedding, samples=...)` when the store accepts it, so MFCC profiles can be matched.

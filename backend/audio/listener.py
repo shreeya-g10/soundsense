@@ -25,6 +25,7 @@ Audio never leaves memory and is never written to disk.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import queue
 import threading
@@ -163,11 +164,7 @@ class YamnetListener:
 
     def _load_model(self) -> None:
         if self._model is None:
-            from backend.ml.category_map import CategoryMapper
-            from backend.ml.yamnet import YamnetModel
-
-            self._model = YamnetModel.instance()
-            self._mapper = CategoryMapper(self._model.class_names)
+            self._model, self._mapper = load_pipeline()
 
     def _run(self) -> None:
         """Inference thread."""
@@ -194,50 +191,86 @@ class YamnetListener:
             except Exception:
                 log.exception("on_window callback raised")
 
-    def _custom_matches(self, embedding: np.ndarray) -> list:
-        match = getattr(self.profile_store, "match", None)
-        if match is None:
-            return []
-        try:
-            return list(match(embedding))
-        except Exception:
-            log.exception("Custom-sound matching failed; continuing without matches")
-            return []
-
-    def _add_background(self, embedding: np.ndarray) -> None:
-        """Calibration windows are room noise: feed them to the store's background bank."""
-        add = getattr(self.profile_store, "add_background", None)
-        if add is None:
-            return
-        try:
-            add(embedding, source="calibration")
-        except Exception:
-            log.exception("Could not add calibration window to the background bank")
+    def _custom_matches(self, embedding: np.ndarray, samples: np.ndarray | None = None) -> list:
+        return custom_matches(self.profile_store, embedding, samples)
 
     def _analyse(self, samples: np.ndarray, timestamp: float, decision) -> WindowResult:
-        if decision.skipped:
-            return WindowResult(
-                timestamp=timestamp,
-                rms=decision.rms,
-                skipped=True,
-                category_scores={},
-                context_scores={},
-                embedding=None,
-                custom_matches=[],
-                inference_ms=0.0,
-                room=self.room,
-            )
-        out = self._model.infer(samples)
-        if decision.calibrating:
-            self._add_background(out.embedding)
+        return analyse_window(self._model, self._mapper, self.profile_store, samples, timestamp, decision, self.room)
+
+
+# --- the shared per-window pipeline (also used by RemoteAudioInput) -----------
+
+def load_pipeline():
+    """(YamnetModel, CategoryMapper), loading YAMNet on first use."""
+    from backend.ml.category_map import CategoryMapper
+    from backend.ml.yamnet import YamnetModel
+
+    model = YamnetModel.instance()
+    return model, CategoryMapper(model.class_names)
+
+
+def custom_matches(profile_store, embedding: np.ndarray, samples: np.ndarray | None = None) -> list:
+    """profile_store.match() for one window; [] if there is no store or it fails.
+
+    The window's audio is passed too (in memory only) when ``match`` accepts
+    ``samples=`` (the real store needs it for MFCC profiles).
+    """
+    match = getattr(profile_store, "match", None)
+    if match is None:
+        return []
+    try:
+        if samples is not None and _accepts_samples(match):
+            return list(match(embedding, samples=samples))
+        return list(match(embedding))
+    except Exception:
+        log.exception("Custom-sound matching failed; continuing without matches")
+        return []
+
+
+def _accepts_samples(fn) -> bool:
+    try:
+        return "samples" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def add_calibration_background(profile_store, embedding: np.ndarray) -> None:
+    """Calibration windows are room noise: feed them to the store's background bank."""
+    add = getattr(profile_store, "add_background", None)
+    if add is None:
+        return
+    try:
+        add(embedding, source="calibration")
+    except Exception:
+        log.exception("Could not add calibration window to the background bank")
+
+
+def analyse_window(model, mapper, profile_store, samples: np.ndarray, timestamp: float,
+                   decision, room: str) -> WindowResult:
+    """Silence decision + YAMNet + category mapping + custom matching -> WindowResult."""
+    if decision.skipped:
         return WindowResult(
             timestamp=timestamp,
             rms=decision.rms,
-            skipped=False,
-            category_scores=self._mapper.category_scores(out.scores),
-            context_scores=self._mapper.context_scores(out.scores),
-            embedding=out.embedding.tolist(),
-            custom_matches=self._custom_matches(out.embedding),
-            inference_ms=out.inference_ms,
-            room=self.room,
+            skipped=True,
+            category_scores={},
+            context_scores={},
+            embedding=None,
+            custom_matches=[],
+            inference_ms=0.0,
+            room=room,
         )
+    out = model.infer(samples)
+    if decision.calibrating:
+        add_calibration_background(profile_store, out.embedding)
+    return WindowResult(
+        timestamp=timestamp,
+        rms=decision.rms,
+        skipped=False,
+        category_scores=mapper.category_scores(out.scores),
+        context_scores=mapper.context_scores(out.scores),
+        embedding=out.embedding.tolist(),
+        custom_matches=custom_matches(profile_store, out.embedding, samples),
+        inference_ms=out.inference_ms,
+        room=room,
+    )
