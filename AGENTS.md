@@ -40,7 +40,7 @@ Each person works on their own branch and merges at the end. Because no two peop
 ## Git workflow
 - **Branches:** `shreeya-ai-audio` (Shreeya), `vaidehi-backend` (Vaidehi), `sneha-frontend` (Sneha).
 - **Never push directly to `main`.** Changes reach `main` through pull requests only.
-- **Merge order at the end:** Shreeya → Vaidehi → Sneha, followed by a joint integration session.
+- **Merge order is flexible** as long as each PR touches only its owner's folders; the merges are followed by a joint integration session.
 - **Pull `main` into your branch only when a `contracts/` change is announced.** Otherwise stay on your branch.
 
 ## Rules
@@ -49,4 +49,4 @@ Each person works on their own branch and merges at the end. Because no two peop
 1. **Only edit files in your own role's folders.** If you need something from another role's code, depend on the interface in `contracts/` and don't change their files.
 2. **Never modify `contracts/`, `requirements.txt`, `AGENTS.md` or `CLAUDE.md` without team agreement.** Propose changes to the team first, then open a small pull request that changes only those files; Shreeya reviews and merges it, then announces it.
 3. **Never commit audio, models, `.db` files or `node_modules`.** `.gitignore` enforces this. Don't force-add around it.
-4. **No audio is ever saved to disk**, with one exception: custom-sound embeddings (numeric vectors, not audio). Raw audio and spectrograms stay in memory only.
+4. **No audio is ever saved to disk**, with two exceptions: custom-sound embeddings (numeric vectors, not audio). Raw audio and spectrograms stay in memory only. Evaluation dataset recordings (WAV/m4a under data/indian/, recorded with consent via dev-only tools like --record-test) are allowed. The running app never saves audio.
