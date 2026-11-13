@@ -171,7 +171,8 @@ def test_exp8_gate_on_skips_and_saves_cpu(smoke_results):
 
 
 def test_every_script_skips_missing_data_with_a_message(tmp_path, capsys):
-    empty = cm.DataPaths(indian=tmp_path / "none", esc50=tmp_path / "none")
+    none = tmp_path / "none"
+    empty = cm.DataPaths(indian=none, esc50=none, fsd50k=none, freesound=none, demand=none)
     ex = cm.FeatureExtractor(model=object(), mapper=object())  # never used: nothing to analyse
     out = tmp_path / "results"
     assert exp1_yamnet.run(out, empty, ex) == []
@@ -181,11 +182,14 @@ def test_every_script_skips_missing_data_with_a_message(tmp_path, capsys):
     for exp in ("exp1", "exp4", "exp6"):
         assert re.search(rf"\[{exp}\] SKIP esc50: ESC-50 not found .*download_esc50", text)
         assert re.search(rf"\[{exp}\] SKIP indian: No Indian ", text)
+    assert "[exp1] SKIP fsd50k: FSD50K subset not found" in text and "download_fsd50k" in text
+    assert "[exp1] SKIP freesound: No usable Freesound clips" in text
     assert not out.exists()
 
 
 def test_exp8_falls_back_to_synthetic_events(tmp_path):
-    empty = cm.DataPaths(indian=tmp_path / "none", esc50=tmp_path / "none")
+    none = tmp_path / "none"
+    empty = cm.DataPaths(indian=none, esc50=none, fsd50k=none, freesound=none, demand=none)
     stream, source, fraction = exp8_resources.build_stream(0.5, empty)
     assert source == "synthetic" and stream.size == 30 * 16000 and 0 < fraction < 1
     again, _, _ = exp8_resources.build_stream(0.5, empty)

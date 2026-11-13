@@ -14,7 +14,10 @@ is active.
 
 The noise segment starts at a random offset (``rng``), is looped if shorter
 than the clip, and is scaled so 20*log10(active_rms(clean) / rms(noise)) =
-snr_db. The sum is clipped to [-1, 1]. Mixes are never written to disk by
+snr_db. If the segment is digital silence (RMS < 1e-4, e.g. a pause in an
+FSD50K speech clip), another offset is drawn, up to 20 times. DEMAND noise
+never gets that quiet (its quietest 0.25 s is 0.0008 RMS), so DEMAND mixes
+always use the first offset. The sum is clipped to [-1, 1]. Mixes are never written to disk by
 the experiments; they are rebuilt from the seed.
 """
 
@@ -25,6 +28,8 @@ import numpy as np
 from backend.audio.silence import DEFAULT_THRESHOLD
 
 SNRS = (20, 10, 5, 0)
+SILENT_RMS = 1e-4  # -80 dBFS: a noise segment this quiet is digital silence, not noise
+MAX_TRIES = 20
 
 
 def rms(x: np.ndarray) -> float:
@@ -58,10 +63,13 @@ def mix(clean: np.ndarray, noise: np.ndarray, snr_db: float, rng: np.random.Gene
         ValueError: if the noise segment is silent (no level to scale).
     """
     clean = np.asarray(clean, np.float32).ravel()
-    seg = noise_segment(noise, clean.size, rng)
-    n = rms(seg)
-    if n == 0:
-        raise ValueError("noise segment is silent")
+    for _ in range(MAX_TRIES):
+        seg = noise_segment(noise, clean.size, rng)
+        n = rms(seg)
+        if n >= SILENT_RMS:
+            break
+    else:
+        raise ValueError(f"noise segment is silent (RMS < {SILENT_RMS} at {MAX_TRIES} offsets)")
     s = active_rms(clean, threshold)
     if s == 0:  # silent clip: the mix is just noise at the clip's (zero) level
         return np.zeros_like(clean)

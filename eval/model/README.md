@@ -111,13 +111,13 @@ The list lives in `eval/model/datasets.py` (`ESC50_TO_CATEGORY`, `ESC50_NEGATIVE
 
 | Dataset | What we use | Licence | Kept in `data/` |
 |---|---|---|---|
-| ESC-50 | 31 of 50 categories (5 targets, 26 negatives), 1240 clips | CC BY-NC 3.0 | `esc50/`, ~523 MB |
-| FSD50K (eval split) | 7 target classes, plus 300 Speech and 300 Music clips as TV stand-ins: 1222 clips at 16 kHz | dataset CC BY 4.0; per clip CC0 / CC-BY / CC-BY-NC (Sampling+ excluded) | `fsd50k/`, ~390 MB (planned) |
-| DEMAND | DKITCHEN, DLIVING, DWASHING at 16 kHz, channels 1 and 9 | CC BY 4.0 | `demand/`, ~58 MB (planned) |
+| ESC-50 | 31 of 50 categories (5 targets, 26 negatives), 1240 clips | CC BY-NC 3.0 | `esc50/`, 523 MiB |
+| FSD50K (eval split) | 7 target classes (622 clips), plus 300 Speech and 298 Music clips as TV stand-ins: 1220 clips at 16 kHz | dataset CC BY 4.0; per clip CC0 / CC-BY / CC-BY-NC (Sampling+ excluded) | `fsd50k/`, 372 MiB |
+| DEMAND | DKITCHEN, DLIVING, DWASHING at 16 kHz, channels 1 and 9 | CC BY 4.0 | `demand/`, 55 MiB |
 | Freesound (by hand) | test-only clips you add | CC0 or CC-BY only | `freesound/` |
 | Our recordings | profile and test clips | team, with consent | `indian/` |
 
-**Total `data/`: about 1.0 GB planned** (budget: 2 GB kept, 8 GB peak). This is updated with the measured size once the FSD50K and DEMAND downloads finish.
+**Total `data/`: 968 MiB (1.01 GB)**, measured on 2026-11-13 with `du -sh data`: ESC-50 523 MiB, FSD50K 372 MiB, DEMAND 55 MiB, YAMNet model 17 MiB; profiles, logs and Freesound are negligible. The budget was 2 GB kept and 8 GB peak. The peak was the same as the final size, because no archive or partial file was ever kept on disk.
 
 **Not used:**
 - **AudioSet** is deliberately not used for testing. YAMNet was trained on AudioSet, so testing on it would measure memorisation, not how well YAMNet generalises to new homes.
@@ -128,14 +128,14 @@ The list lives in `eval/model/datasets.py` (`ESC50_TO_CATEGORY`, `ESC50_NEGATIVE
 
 ```bash
 python -m eval.model.download_fsd50k --list   # mapping, counts and sizes; metadata only
-python -m eval.model.download_fsd50k          # ~765 MB of HTTP range requests, ~390 MB kept
+python -m eval.model.download_fsd50k          # 867 MB in 887 HTTP range requests (~42 min, Zenodo rate limit), 388 MB kept
 ```
 
 - **Download:** the eval audio is a 6.3 GB split zip (`.z01` + `.zip`), and re-joining it would need about 12.5 GB. Instead, `rangezip.py` reads the archive's central directory over HTTP byte ranges and fetches only the selected clips, converting each to 16 kHz mono WAV in memory. Peak disk use is about the kept size. Clips already on disk are skipped, so a run can be resumed.
 - **Mapping** (exact FSD50K class names): `Doorbell` → doorbell, `Knock` → door_knock (all knocks), `Shatter` → glass_break (`Glass` alone is mostly clinking), `Bark` → dog_bark, `Crying_and_sobbing` → baby_cry (only if the Freesound title or tags say baby, infant or newborn), `Microwave_oven` → appliance_beep, `Water_tap_and_faucet` and `Sink_(filling_or_washing)` → water_running.
 - **Skipped clips:** a clip mapping to two of our categories is skipped.
 - **Not in FSD50K:** smoke alarm (only a generic `Alarm`, not used), pressure cooker (no whistle class) and Television.
-- **TV backgrounds:** 300 `Speech` and 300 `Music` clips (seed 0) whose labels contain no target-like class. In the loader they are label `negative`, `negative_type` `speech`/`music`.
+- **TV backgrounds:** 300 `Speech` and 298 `Music` clips (seed 0) whose labels contain no target-like class. In the loader they are label `negative`, `negative_type` `speech`/`music`. Two clips are labelled both Speech and Music; each is used once, as speech, so Music has 298.
 - **Attribution:** `data/fsd50k/metadata.csv` keeps every clip's licence, licence URL, uploader, title and Freesound URL. `FSD50K_LICENSE_AND_ATTRIBUTION.txt` has the citation (Fonseca et al., 2022).
 
 #### Freesound (`data/freesound/`, by hand)
@@ -151,7 +151,7 @@ python -m eval.model.datasets --init-freesound   # creates data/freesound/<categ
 #### DEMAND noise (`data/demand/`)
 
 ```bash
-python -m eval.model.download_demand          # ~40 MB transferred, no zip written to disk
+python -m eval.model.download_demand          # 37 MB transferred, 58 MB kept, no zip written to disk
 ```
 
 - **What's kept:** DKITCHEN (kitchen), DLIVING (living room) and DWASHING (laundry room) at 16 kHz. Only channels 1 and 9 of the 16 microphones are kept, read from inside the Zenodo zips by byte range.
@@ -159,7 +159,7 @@ python -m eval.model.download_demand          # ~40 MB transferred, no zip writt
 
 #### Mixer (`eval/model/mixer.py`)
 
-`mix(clean, noise, snr_db, rng)` adds a randomly offset noise segment, looped if it's too short, scaled so the **active-part** SNR equals `snr_db`. Active part means the RMS of the clean clip's non-silent windows. A whole-clip RMS would make short events in silent clips much louder than the stated SNR. The result is clipped to [-1, 1]. The SNRs used are 20, 10, 5 and 0 dB. Mixes are rebuilt from a seed and never saved.
+`mix(clean, noise, snr_db, rng)` adds a randomly offset noise segment, looped if it's too short, scaled so the **active-part** SNR equals `snr_db`. Active part means the RMS of the clean clip's non-silent windows. A whole-clip RMS would make short events in silent clips much louder than the stated SNR. The result is clipped to [-1, 1]. The SNRs used are 20, 10, 5 and 0 dB. Mixes are rebuilt from a seed and never saved. If a noise segment is digital silence (RMS < 1e-4, such as a pause in an FSD50K speech clip), another offset is drawn, up to 20 times. If the clip is silent everywhere it's needed, Experiment 5 moves on to the next background clip. DEMAND noise never gets that quiet (its quietest 0.25 s is 0.0008 RMS), so the noise-robustness mixes always use the first offset.
 
 ### Loader (`eval/model/datasets.py`)
 
@@ -486,7 +486,7 @@ One row per setting.
 
 ### Results so far
 
-Run on 2026-11-13 on **ESC-50 only**; the Indian recordings aren't available yet, so every `indian` row is missing (skipped). Re-run `python -m eval.model.run_all` once `data/indian/` is filled.
+Run on 2026-11-13 on **ESC-50, the FSD50K subset and DEMAND noise**. The Indian recordings and Freesound clips aren't available yet, so their rows are missing (skipped). Re-run `python -m eval.model.run_all` once they are in `data/`. The full run takes about 35 min on an Apple M2; the noise experiment on FSD50K alone is about 20 min.
 
 **Experiment 1** (YAMNet alone, ESC-50, threshold 0.15):
 - **Overall:** window level macro F1 0.71 (accuracy 0.88, 8333 windows); clip level macro F1 0.68 (accuracy 0.77, 1240 clips).
@@ -494,6 +494,11 @@ Run on 2026-11-13 on **ESC-50 only**; the Indian recordings aren't available yet
 - **Per category, window F1:** dog bark 0.81, baby cry 0.72, glass break 0.61, door knock 0.59, water running 0.55.
 - **False alerts at clip level:** 26% of negative clips raise one, mostly glass_break (63), dog_bark (46), appliance_beep (46) and door_knock (35).
 - **Threshold sweep:** at clip level macro F1 peaks at threshold 0.35 (0.74). At window level it peaks at 0.15.
+
+**Experiment 1 on FSD50K** (1220 clips, threshold 0.15):
+- **Overall:** clip level macro F1 0.70 (accuracy 0.77); window level 0.56.
+- **Per category, clip F1:** water running 0.80, dog bark 0.78, baby cry 0.77, glass break 0.74, door knock 0.71, doorbell 0.50, appliance beep (`Microwave_oven`) 0.44.
+- **TV-like sound:** 15% of the 598 Speech/Music clips raise a false alert, mostly glass_break, dog_bark, door_knock and appliance_beep. That is the TV-guard problem in numbers.
 
 **Experiment 4** (ESC-50 stand-in, 5 profiles from fold 1):
 - **Window level:** yamnet+custom 0.731 vs YAMNet 0.711 (+0.020); custom only 0.596.
@@ -513,8 +518,24 @@ Run on 2026-11-13 on **ESC-50 only**; the Indian recordings aren't available yet
 - **MFCC:** it barely beats chance (AUC 0.57). Unrelated sounds score as high as the targets, so its 0.991 threshold, tuned on synthetic sounds, is never reached.
 - **Both thresholds need re-tuning on the Indian set** (`tune_custom_threshold.py`).
 
+**Noise robustness** (clip-level macro F1; "all" = the three DEMAND noises together):
+
+| Dataset / system | clean | 20 dB | 10 dB | 5 dB | 0 dB |
+|---|---|---|---|---|---|
+| ESC-50, YAMNet | 0.676 | 0.666 | 0.641 | 0.619 | 0.609 |
+| ESC-50, YAMNet + custom | 0.683 | 0.681 | 0.656 | 0.627 | 0.616 |
+| FSD50K, YAMNet | 0.695 | 0.679 | 0.653 | 0.624 | 0.587 |
+
+- **Slope:** F1 falls gently from 20 to 0 dB. Custom profiles add about +0.01 at every SNR.
+- **By noise, at 0 dB:** kitchen hurts most (−0.14 to −0.17), then living room (−0.06 ESC-50, −0.17 FSD50K). The washing machine barely matters (−0.01): its noise has all its energy below 300 Hz, a rumble YAMNet's categories ignore.
+
+**Experiment 5 TV-guard mixes** (347 targets from FSD50K and ESC-50, 100 TV-only clips per type):
+- **Detection** (YAMNet clip prediction = target): 0.77 clean; under speech 0.71 / 0.62 / 0.58 / 0.52 at 20 / 10 / 5 / 0 dB; under music 0.67 / 0.56 / 0.55 / 0.48. Doorbells suffer most: 0.10 under speech at 0 dB.
+- **TV alone** raises a false alert in 17% of speech and 13% of music clips.
+- **Context scores:** YAMNet's `television` score is about 0.00 even on TV-like sound. The usable TV-guard signals are `speech` (0.43 on speech) and `music` (0.67 on music). See `exp5_tvguard_windows.csv` for per-window scores to replay the guard.
+
 **Experiment 8** (10-minute stream from ESC-50 clips, 36% events, Apple M2):
 - **CPU:** the gate skips 71.6% of windows and cuts CPU from 1.3% to 0.4% of one core (real-time equivalent).
 - **Inference:** ~2.6 ms per window either way.
-- **RAM:** peak 760 MB in both settings. That is mostly TensorFlow and YAMNet, so the gate saves CPU, not memory.
-- **RAM is noisy on macOS:** a repeat run on 2026-11-13 gave 891 MB (gate off) and 787 MB (gate on). Run-to-run differences of about ±100 MB come from macOS memory compression, so don't read a RAM difference between the settings as a gate effect without repeating the run.
+- **RAM:** peak 811 MB with the gate off and 781 MB with it on. That is mostly TensorFlow and YAMNet, so the gate saves CPU, not memory.
+- **RAM is noisy on macOS:** earlier runs gave 760/760 and 891/787 MB. Run-to-run differences of about ±100 MB come from macOS memory compression, so don't read a RAM difference between the settings as a gate effect without repeating the run.

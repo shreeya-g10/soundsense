@@ -100,6 +100,7 @@ def run(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths(),
           f"+ {min(tv_only, min(map(len, backgrounds.values())))} TV-only clips per type", flush=True)
     windows: list[dict] = []
     clips_out: list[dict] = []  # per mix: summary inputs
+    skipped_bg: set[str] = set()  # backgrounds that were digital silence where a target needed them
 
     def record(mix_id, meta, feat, target_label):
         windows.extend(_rows(mix_id, meta, feat, threshold))
@@ -117,10 +118,18 @@ def run(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths(),
                                                           "snr_db": "clean"}, extractor.features(clip), clip.category)
         for bg_type, pool in backgrounds.items():
             rng = np.random.default_rng(zlib.crc32(f"{clip.path.name}|{bg_type}".encode()))
-            bg = pool[int(rng.integers(len(pool)))]
-            bg_audio = bg.load()
-            for snr in SNRS:
-                mixed = mix(audio, bg_audio, snr, rng)
+            start = int(rng.integers(len(pool)))
+            for k in range(len(pool)):  # next clip if this one is (almost) all digital silence
+                bg = pool[(start + k) % len(pool)]
+                bg_audio = bg.load()
+                try:
+                    mixes = [(snr, mix(audio, bg_audio, snr, rng)) for snr in SNRS]
+                    break
+                except ValueError:
+                    skipped_bg.add(bg.path.name)
+            else:
+                raise RuntimeError(f"every {bg_type} background is silent")
+            for snr, mixed in mixes:
                 meta = {**base, "background_type": bg_type, "background_file": bg.path.name, "snr_db": snr}
                 record(f"{clip.source}:{clip.path.stem}:{bg_type}:{snr}", meta,
                        extractor.clip_features(clip, mixed), clip.category)
@@ -147,6 +156,8 @@ def run(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths(),
             "mean_best_target_score": None if label == cm.NONE else float(np.mean([c["best"] for c in group])),
             **{f"mean_ctx_{name}": float(ctx[:, j].mean()) if len(ctx) else None for j, name in enumerate(CONTEXTS)},
         })
+    if skipped_bg:
+        print(f"[{NAME}] {len(skipped_bg)} background clip(s) replaced by the next one: silent where needed", flush=True)
     for r in summary:
         if r["target_label"] == cm.NONE:
             print(f"[{NAME}] TV only ({r['background_type']}): false alerts {cm.fmt(r['any_alert_rate'])} "

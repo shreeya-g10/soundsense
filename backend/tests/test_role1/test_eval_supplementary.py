@@ -154,6 +154,25 @@ def test_mix_is_seeded_loops_short_noise_and_clips():
         mixer.mix(clean, np.zeros(SR, np.float32), 5, np.random.default_rng(0))
 
 
+def test_mix_skips_digitally_silent_stretches_of_the_noise():
+    clean = event_clip(seconds=1.0, event=(0.2, 0.8))
+    noise = np.zeros(6 * SR, np.float32)  # 4 s of silence, then 2 s of noise (like a long pause in speech)
+    noise[-2 * SR:] = np.random.default_rng(0).standard_normal(2 * SR).astype(np.float32) * 0.1
+    for seed in range(5):
+        mixed = mixer.mix(clean, noise, 5, np.random.default_rng(seed))
+        assert mixer.measured_snr(clean, mixed) == pytest.approx(5, abs=0.5)
+
+
+def test_mix_uses_the_first_offset_when_the_noise_is_not_silent():
+    clean = event_clip()
+    noise = np.random.default_rng(3).standard_normal(4 * SR).astype(np.float32) * 0.001  # quiet, but noise
+    rng_a, rng_b = np.random.default_rng(11), np.random.default_rng(11)
+    expected_seg = mixer.noise_segment(noise, clean.size, rng_b)
+    mixed = mixer.mix(clean, noise, 10, rng_a)
+    scale = mixer.active_rms(clean) / mixer.rms(expected_seg) / 10 ** 0.5
+    np.testing.assert_allclose(mixed, np.clip(clean + expected_seg * scale, -1, 1), atol=1e-6)
+
+
 # --- FSD50K selection ------------------------------------------------------------------
 
 CC0 = "http://creativecommons.org/publicdomain/zero/1.0/"
@@ -201,6 +220,14 @@ def test_fsd50k_tv_backgrounds_are_capped_and_seeded():
     b, _ = download_fsd50k.select(rows, info, tv_per_class=10)
     assert [p.fname for p in a] == [p.fname for p in b]
     assert sum(p.our_label == "speech" for p in a) == 10 and sum(p.our_label == "music" for p in a) == 10
+
+
+def test_fsd50k_clip_in_both_speech_and_music_is_used_once():
+    rows, info = fake_fsd([("Speech,Music", CC0, "song with talking")] + [("Music", CC0, "m")] * 3)
+    picks, skipped = download_fsd50k.select(rows, info, tv_per_class=10)
+    assert [(p.fname, p.our_label) for p in picks if p.fname == "0"] == [("0", "speech")]
+    assert len({p.fname for p in picks}) == len(picks)
+    assert skipped["in both Speech and Music samples (kept once)"] == 1
 
 
 def test_fsd50k_mapping_names_are_fsd50k_classes():

@@ -16,7 +16,8 @@ Selected (eval split only):
                  the Freesound title/tags say baby/infant/newborn
   TV backgrounds up to 300 Speech and 300 Music clips (seed 0) whose labels
                  contain no target-like class: the TV-guard test sound (FSD50K
-                 has no Television class)
+                 has no Television class). A clip labelled both is used once,
+                 as speech.
   licences       CC0, CC-BY, CC-BY-NC (Sampling+ is skipped); each clip's
                  licence, uploader, title and Freesound URL go to metadata.csv
 
@@ -148,9 +149,14 @@ def select(eval_rows: list[dict], clip_info: dict, licenses=LICENSES, tv_per_cla
             if cls in labels and not NOT_IN_TV & set(labels) and lic in licenses:
                 tv_pool[cls].append(row)
     rng = random.Random(seed)
+    taken = {p.fname for p in picks}
     for cls, rows in tv_pool.items():
         rows = sorted(rows, key=lambda r: r["fname"])
         for row in rng.sample(rows, min(tv_per_class, len(rows))):
+            if row["fname"] in taken:  # labelled both Speech and Music: use it once (as the first class)
+                skipped["in both Speech and Music samples (kept once)"] += 1
+                continue
+            taken.add(row["fname"])
             picks.append(make(row, "tv_background", TV_CLASSES[cls]))
     return picks, skipped
 
