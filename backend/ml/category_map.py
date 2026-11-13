@@ -46,10 +46,17 @@ CATEGORY_CLASSES: dict[str, list[str]] = {
     # user's own cooker, refine it into "this is MY cooker".
     PRESSURE_COOKER: ["Whistling", "Whistle", "Steam", "Hiss", "Steam whistle"],
     BABY_CRY: ["Baby cry, infant cry"],
-    DOOR_KNOCK: ["Knock"],
+    # In live tests, real door knocks scored "Knock" ~0.21 and "Door" ~0.15,
+    # often alongside "Wood" / "Chop". Those two are NOT mapped: chopping on a
+    # wooden board in the kitchen would then raise door-knock alerts.
+    DOOR_KNOCK: ["Knock", "Door"],
     DOORBELL: ["Doorbell", "Ding-dong"],
     DOG_BARK: ["Bark", "Dog", "Bow-wow", "Yip"],
     APPLIANCE_BEEP: ["Beep, bleep", "Microwave oven", "Buzzer"],
+    # Known confusion: YAMNet often scores pressure-cooker steam/hiss as
+    # "Sink (filling or washing)" and "Water tap, faucet", so a cooker can
+    # also raise water_running. Custom cooker profiles (S5) are expected to
+    # resolve this.
     WATER_RUNNING: ["Water tap, faucet", "Sink (filling or washing)"],
 }
 

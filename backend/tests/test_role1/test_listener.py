@@ -269,6 +269,12 @@ def test_s4b_extra_classes_and_alarm_exclusion():
     assert "Alarm" not in CATEGORY_CLASSES["smoke_alarm"]  # see comment in category_map.py
 
 
+def test_s5d_door_in_door_knock_without_wood_or_chop(class_names):
+    assert CATEGORY_CLASSES["door_knock"] == ["Knock", "Door"]
+    assert "Door" in class_names
+    assert not {"Wood", "Chop"} & {n for names in CATEGORY_CLASSES.values() for n in names}
+
+
 # --- demo_listener display and CSV log (S5c) -------------------------------
 
 def _result(scores: dict[str, float], skipped: bool = False) -> WindowResult:
