@@ -267,3 +267,82 @@ def test_s4b_extra_classes_and_alarm_exclusion():
     assert {"Bow-wow", "Yip"} <= set(CATEGORY_CLASSES["dog_bark"])
     assert "Buzzer" in CATEGORY_CLASSES["appliance_beep"]
     assert "Alarm" not in CATEGORY_CLASSES["smoke_alarm"]  # see comment in category_map.py
+
+
+# --- demo_listener display and CSV log (S5c) -------------------------------
+
+def _result(scores: dict[str, float], skipped: bool = False) -> WindowResult:
+    cats = {c: 0.0 for c in CATEGORIES} | scores
+    return WindowResult(
+        timestamp=1000.0, rms=0.0 if skipped else 0.05, skipped=skipped,
+        category_scores={} if skipped else cats,
+        context_scores={} if skipped else {c: 0.0 for c in CONTEXTS},
+        embedding=None, custom_matches=[], inference_ms=0.0 if skipped else 5.0, room="Laptop",
+    )
+
+
+TOP3 = [("Speech", 0.99), ("Narration", 0.05), ("Inside, small room", 0.02)]
+
+
+def test_demo_dash_when_best_category_below_label_min():
+    from backend.audio.demo_listener import LABEL_MIN, fmt
+
+    line = fmt(_result({"door_knock": LABEL_MIN - 0.01}), TOP3)
+    assert "rms=0.0500  — " in line
+    assert "door_knock" not in line and "next" not in line
+    assert "yamnet: Speech 0.99, Narration 0.05, Inside, small room 0.02" in line
+
+
+def test_demo_names_category_at_or_above_label_min():
+    from backend.audio.demo_listener import LABEL_MIN, fmt
+
+    line = fmt(_result({"doorbell": LABEL_MIN, "door_knock": 0.05}), TOP3)
+    assert "doorbell" in line and "—" not in line and "(next door_knock 0.05)" in line
+    assert "yamnet: Speech 0.99" in line
+
+
+def test_demo_skipped_line_has_no_label_or_yamnet():
+    from backend.audio.demo_listener import fmt
+
+    line = fmt(_result({}, skipped=True), [])
+    assert "skipped" in line and "yamnet" not in line
+
+
+def test_demo_csv_log_rows(tmp_path):
+    import csv
+
+    from backend.audio.demo_listener import CsvLog
+
+    path = tmp_path / "log.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        log = CsvLog(f)
+        log.write(_result({"doorbell": 0.8}), TOP3)
+        log.write(_result({}, skipped=True), [])  # skipped windows are not logged
+        log.write(_result({}), TOP3[:1])  # fewer than 3 classes -> blank cells
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 2
+    assert rows[0]["yamnet_1"] == "Speech" and float(rows[0]["yamnet_1_score"]) == pytest.approx(0.99)
+    assert rows[0]["yamnet_3"] == "Inside, small room"
+    assert float(rows[0]["doorbell"]) == pytest.approx(0.8)
+    assert set(CATEGORIES) <= set(rows[0])
+    assert rows[1]["yamnet_2"] == "" and rows[1]["yamnet_2_score"] == ""
+
+
+def test_demo_listener_passes_real_yamnet_top3(model):
+    from backend.audio.demo_listener import DemoListener
+
+    got = []
+    listener = DemoListener(lambda w, top: got.append((w, top)), calibrate=False)
+    listener._mic = FakeMic(listener._on_capture, [silent(), loud()])
+    listener.start()
+    deadline = time.monotonic() + 30
+    while len(got) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    listener.stop()
+    (w0, top0), (w1, top1) = got
+    assert w0.skipped and top0 == []
+    assert not w1.skipped and len(top1) == 3
+    assert all(name in model.class_names for name, _ in top1)
+    assert [s for _, s in top1] == sorted((s for _, s in top1), reverse=True)
+    expected = yamnet.top_k(model.infer(loud()).scores, 3)
+    assert [n for n, _ in top1] == [n for n, _ in expected]
