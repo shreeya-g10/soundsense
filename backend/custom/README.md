@@ -4,6 +4,38 @@
 
 User-taught custom sounds: embedding extraction and matching (scikit-learn). Embeddings are the only audio-derived data ever saved to disk.
 
+## How to use
+
+| Module | What it is | Use it for |
+|---|---|---|
+| `profile_store.py` | `YamnetProfileStore`: the real `contracts.types.ProfileStore`, plus `match()`, `score()`, `is_negative()` and the background bank | custom sounds, feedback, the TV-free background |
+| `fake_profile_store.py` | `FakeProfileStore`: in-memory, random values (Step 0) | backend tests without YAMNet |
+| `demo_profiles.py` | teach a sound, live-test it, test it on WAV files, record evaluation clips | trying custom sounds by hand |
+
+```python
+from backend.custom.profile_store import YamnetProfileStore
+
+store = YamnetProfileStore()                         # data/profiles/: embeddings/MFCC features only, never audio
+pid = store.create("My Kitchen Cooker", "pressure_cooker")
+store.add_example_from_mic(pid, seconds=3)           # x3-5; returns the example count
+store.test_from_mic(pid)                             # best similarity 0..1
+store.add_feedback(window.embedding, "pressure_cooker", pid, positive=False)   # false alert -> negative
+store.add_feedback(window.embedding, "smoke_alarm", None, positive=False)      # base-model false alert
+store.is_negative(window.embedding, "smoke_alarm")   # engine: skip this base-model alert?
+store.set_method("mfcc")                             # new profiles use the MFCC baseline
+```
+
+- **Through the listener:** pass the store to `YamnetListener(..., profile_store=store)`. It then fills `WindowResult.custom_matches` and feeds calibration windows to the background bank.
+- **Contract:** the methods in `contracts.types.ProfileStore` are the contract. `match`, `score`, `is_negative` and `add_background` are extras.
+
+```bash
+python -m backend.custom.demo_profiles --name "My Kitchen Cooker" --category pressure_cooker --keep
+python -m backend.custom.demo_profiles --list
+python -m backend.custom.demo_profiles --test "My Kitchen Cooker" --seconds 0
+python -m backend.custom.demo_profiles --test "My Kitchen Cooker" --test-wav data/indian/test/pressure_cooker/
+python -m backend.custom.demo_profiles --record-test pressure_cooker      # evaluation clip, asks for consent
+```
+
 ## Part S5: real ProfileStore (`profile_store.py`)
 
 `YamnetProfileStore(root="data/profiles", *, threshold=None, scoring="centered", margin=True, augment=True, top_k=3)` implements `contracts.types.ProfileStore`, raising the contract's `KeyError` and `ValueError`. It also has `match(embedding) -> list[CustomMatch]`, which `YamnetListener(profile_store=store)` calls on every active window, and `add_background(embedding, source)`, which the listener calls with each silence-gate calibration window.

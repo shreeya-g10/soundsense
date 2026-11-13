@@ -38,6 +38,8 @@ DETECTION_THRESHOLD = 0.15  # a category is predicted when its score >= this (as
 
 ESC50 = "esc50"
 INDIAN = "indian"
+FSD50K = "fsd50k"
+FREESOUND = "freesound"
 ESC50_PROFILE_FOLD = 1  # ESC-50 stand-in for exp4/exp6: profiles from fold 1, test on folds 2-5
 
 
@@ -49,6 +51,9 @@ class DataMissing(Exception):
 class DataPaths:
     indian: Path = ds.INDIAN_ROOT
     esc50: Path = ds.ESC50_ROOT
+    fsd50k: Path = ds.FSD50K_ROOT
+    freesound: Path = ds.FREESOUND_ROOT
+    demand: Path = ds.DEMAND_ROOT
 
     @property
     def profile(self) -> Path:
@@ -81,6 +86,37 @@ def get_indian_test(paths: DataPaths) -> list[ds.Clip]:
         raise DataMissing(f"No Indian test recordings in {paths.test} (see eval/model/README.md, "
                           f"'Our Indian recordings').")
     return clips
+
+
+def get_fsd50k(paths: DataPaths) -> list[ds.Clip]:
+    """FSD50K subset: targets + Speech/Music (label "negative", negative_type speech/music)."""
+    clips = ds.list_fsd50k_clips(Path(paths.fsd50k))
+    if not clips:
+        raise DataMissing(f"FSD50K subset not found in {paths.fsd50k}. Run: python -m eval.model.download_fsd50k")
+    return clips
+
+
+def get_freesound(paths: DataPaths) -> list[ds.Clip]:
+    clips = ds.list_freesound_clips(Path(paths.freesound))
+    if not clips:
+        raise DataMissing(f"No usable Freesound clips in {paths.freesound} (CC0/CC-BY files listed in "
+                          f"metadata.csv; see eval/model/README.md, 'Freesound').")
+    return clips
+
+
+def get_demand(paths: DataPaths) -> dict[str, list[Path]]:
+    noise = ds.list_demand_noise(Path(paths.demand))
+    if not noise:
+        raise DataMissing(f"DEMAND noise not found in {paths.demand}. Run: python -m eval.model.download_demand")
+    return noise
+
+
+def get_tv_backgrounds(paths: DataPaths) -> dict[str, list[ds.Clip]]:
+    bg = ds.list_tv_backgrounds(Path(paths.fsd50k))
+    if not all(bg.values()):
+        raise DataMissing(f"FSD50K Speech/Music clips not found in {paths.fsd50k}. "
+                          f"Run: python -m eval.model.download_fsd50k")
+    return bg
 
 
 def get_indian_profile(paths: DataPaths) -> list[ds.Clip]:
@@ -130,6 +166,7 @@ class WindowFeat:
     embedding: np.ndarray  # (1024,)
     inference_ms: float
     mfcc: np.ndarray | None = None  # (40,) mfcc_vector, if requested
+    context: np.ndarray | None = None  # (3,) context scores, CONTEXTS order (speech, music, television)
 
     def category_scores(self) -> dict[str, float]:
         return dict(zip(CATEGORIES, map(float, self.scores)))
@@ -185,6 +222,16 @@ class FeatureExtractor:
             for wf in cached.windows:
                 wf.mfcc = mfcc_vector(by_start[round(wf.start_s, 3)])
             return cached
+        feats, total = self.analyse(audio, mfcc)
+        result = ClipFeat(clip, feats, total, audio.size / SAMPLE_RATE)
+        self._cache[key] = result
+        return result
+
+    def analyse(self, audio: np.ndarray, mfcc: bool = False) -> tuple[list[WindowFeat], int]:
+        """(non-silent window features, total windows) of audio in memory (not cached)."""
+        from contracts.types import CONTEXTS
+
+        self.load()
         feats, total = [], 0
         for start, w in windows_of(audio):
             total += 1
@@ -193,16 +240,21 @@ class FeatureExtractor:
                 continue
             out = self.model.infer(w)
             cats = self.mapper.category_scores(out.scores)
+            ctx = self.mapper.context_scores(out.scores)
             wf = WindowFeat(start, level, np.array([cats[c] for c in CATEGORIES], np.float32),
-                            np.asarray(out.embedding, np.float32), float(out.inference_ms))
+                            np.asarray(out.embedding, np.float32), float(out.inference_ms),
+                            context=np.array([ctx[c] for c in CONTEXTS], np.float32))
             if mfcc:
                 from backend.custom.profile_store import mfcc_vector
 
                 wf.mfcc = mfcc_vector(w)
             feats.append(wf)
-        result = ClipFeat(clip, feats, total, audio.size / SAMPLE_RATE)
-        self._cache[key] = result
-        return result
+        return feats, total
+
+    def clip_features(self, clip: ds.Clip, audio: np.ndarray, mfcc: bool = False) -> ClipFeat:
+        """Features of ``audio`` (e.g. a noisy mix of ``clip``), not cached."""
+        feats, total = self.analyse(audio, mfcc)
+        return ClipFeat(clip, feats, total, audio.size / SAMPLE_RATE)
 
     def many(self, clips: list[ds.Clip], mfcc: bool = False, label: str = "") -> list[ClipFeat]:
         out, t0 = [], time.monotonic()

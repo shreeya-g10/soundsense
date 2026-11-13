@@ -4,6 +4,44 @@
 
 Microphone capture (sounddevice) and audio preprocessing (Librosa). Audio stays in memory only — never written to disk.
 
+## How to use
+
+| Module | What it is | Use it for |
+|---|---|---|
+| `listener.py` | `YamnetListener`: the real `contracts.types.AudioListener` (mic → silence gate → YAMNet → category map → custom matching → `WindowResult`) | the app's laptop mic |
+| `remote_input.py` | `YamnetRemoteInput`: the real `contracts.types.RemoteAudioInput` (phone frames → the same pipeline, per room) | the `/ws/listener` WebSocket (Phase 5) |
+| `capture.py` | `MicCapture` (16 kHz mono windows on a thread), `Windower` (0.96 s windows every 0.48 s) | low-level capture; tests |
+| `silence.py` | `SilenceGate` (CPU saver with auto-calibration), `rms`, `rms_to_db` | skipping silent windows; Experiment 8 counts |
+| `demo_capture.py`, `demo_listener.py` | command-line demos (below) | checking a mic by hand |
+
+**Wiring it into the backend.** This was checked against Vaidehi's `BackendRuntime`. `BackendRuntime` builds its engine itself, so build the runtime with the real profile store, then swap in the real inputs before `start()`:
+
+```python
+from backend.api.runtime import BackendRuntime
+from backend.audio.listener import YamnetListener
+from backend.audio.remote_input import YamnetRemoteInput
+from backend.custom.profile_store import YamnetProfileStore
+
+store = YamnetProfileStore()                      # data/profiles/ (embeddings only)
+rt = BackendRuntime(profile_store=store)
+rt.listener = YamnetListener(rt.engine.on_window, profile_store=store)        # cpu_saver=True, calibrate=True
+rt.remote_audio = YamnetRemoteInput(rt.engine.on_window, profile_store=store)
+```
+
+- **Settings:** `rt.listener.gate.enabled = settings["cpu_saver"]` follows the CPU-saver setting.
+- **Phone audio:** `rt.remote_audio.push(frame_bytes, room)` takes each `/ws/listener` frame.
+- **Shutdown:** call `rt.remote_audio.close()` at shutdown.
+- **Callbacks:** `on_window` is called from a worker thread and must return quickly. See `contracts/types.py`.
+
+**Live check of a mic, nothing saved:**
+
+```bash
+python -m backend.audio.demo_capture --list-devices
+python -m backend.audio.demo_capture --seconds 0          # RMS meter, CALIB / SKIPPED / ACTIVE per window
+python -m backend.audio.demo_listener --seconds 0         # full pipeline: best category, top-3 YAMNet classes
+python -m backend.audio.demo_listener --log               # also data/logs/listener-*.csv (top-3 classes + scores, no audio)
+```
+
 ## Part S1: microphone capture (`capture.py`)
 
 - `MicCapture(on_window, device=None)` opens the mic with sounddevice at 16 kHz mono float32 and calls `on_window(samples, timestamp)` on a background thread.
@@ -43,7 +81,10 @@ mic → `MicCapture` thread (windows + silence gate) → `YamnetListener` thread
 - `listener.gate.enabled` is the `cpu_saver` setting. `listener.stats()` returns the gate counts plus dropped windows and mic overflows.
 - `profile_store`: if it has `match(embedding)` (the real `YamnetProfileStore` from S5 does), `custom_matches` is filled on every active window. If matching fails, the window is still delivered with `custom_matches=[]`.
 
-Demo: `python -m backend.audio.demo_listener [--no-calibrate] [--seconds 0] [--no-cpu-saver]`
+Demo: `python -m backend.audio.demo_listener [--no-calibrate] [--threshold T] [--seconds 0] [--no-cpu-saver] [--log]`.
+- **Each line** shows the best category, or `—` if every category is below 0.15. It also shows the context scores and YAMNet's raw top-3 classes.
+- **`--log`** saves the top-3 classes and category scores of every active window to `data/logs/listener-<time>.csv` (git-ignored, no audio).
+- **Calibration windows** (the first ~2 s after `start()`) are added to the profile store's background bank (`add_background`) when the store supports it.
 
 ## Part S6: RemoteAudioInput (`remote_input.py`, Phase 5)
 

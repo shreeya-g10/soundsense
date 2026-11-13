@@ -4,6 +4,33 @@
 
 Model evaluation: accuracy, precision/recall, confusion matrices per sound class.
 
+## How to use
+
+```bash
+# 1. data (git-ignored, ~1 GB in total; see "Datasets used" below)
+python -m eval.model.download_esc50
+python -m eval.model.download_fsd50k
+python -m eval.model.download_demand
+python -m eval.model.datasets --init-freesound      # optional: hand-picked CC0/CC-BY Freesound clips
+python -m eval.model.datasets                       # check names and licences, count clips
+# 2. experiments -> eval/model/results/*.csv
+python -m eval.model.run_all
+python -m eval.model.run_all --smoke                # synthetic mini-dataset: does every script run?
+```
+
+| Module | What it is |
+|---|---|
+| `datasets.py` | dataset layout, Drive naming guide, loaders (`iter_test_files`, `list_*_clips`), `load_audio` (any format → 16 kHz mono) |
+| `download_esc50.py`, `download_fsd50k.py`, `download_demand.py` | dataset downloaders. FSD50K and DEMAND use HTTP byte ranges, so no archive is stored. |
+| `rangezip.py` | read selected members of a (split) zip over HTTP ranges |
+| `mixer.py` | `mix(clean, noise, snr_db, rng)`: active-part SNR mixing in memory |
+| `metrics.py` | confusion matrix, per-class P/R/F1, macro F1, detection metrics, ROC AUC |
+| `common.py` | shared plumbing: data paths and skip messages, cached per-window YAMNet features, custom-profile splits, CSV writing |
+| `exp1_yamnet.py`, `exp4_custom.py`, `exp6_methods.py`, `exp8_resources.py` | Experiments 1, 4, 6, 8 |
+| `exp_noise.py`, `exp5_tvguard.py` | noise robustness (DEMAND), and the TV-guard mixes for Experiment 5 |
+| `run_all.py` | runs every experiment and checks the CSV columns; `--smoke` |
+| `tune_custom_threshold.py`, `build_background_bank.py` | custom-sound threshold tuning; ESC-50 generic background bank |
+
 ## Evaluation datasets
 
 Everything under `data/` is git-ignored. Only the scripts in `eval/model/` are committed. Never commit audio.
@@ -78,6 +105,62 @@ This downloads the official archive from https://github.com/karolpiczak/ESC-50 a
 
 The list lives in `eval/model/datasets.py` (`ESC50_TO_CATEGORY`, `ESC50_NEGATIVES`). ESC-50 is licensed **CC BY-NC 3.0**: non-commercial use only, and cite Piczak, "ESC: Dataset for Environmental Sound Classification", ACM MM 2015.
 
+### Supplementary public datasets (Part S7d)
+
+#### Datasets used, licences and disk
+
+| Dataset | What we use | Licence | Kept in `data/` |
+|---|---|---|---|
+| ESC-50 | 31 of 50 categories (5 targets, 26 negatives), 1240 clips | CC BY-NC 3.0 | `esc50/`, ~523 MB |
+| FSD50K (eval split) | 7 target classes, plus 300 Speech and 300 Music clips as TV stand-ins: 1222 clips at 16 kHz | dataset CC BY 4.0; per clip CC0 / CC-BY / CC-BY-NC (Sampling+ excluded) | `fsd50k/`, ~390 MB (planned) |
+| DEMAND | DKITCHEN, DLIVING, DWASHING at 16 kHz, channels 1 and 9 | CC BY 4.0 | `demand/`, ~58 MB (planned) |
+| Freesound (by hand) | test-only clips you add | CC0 or CC-BY only | `freesound/` |
+| Our recordings | profile and test clips | team, with consent | `indian/` |
+
+**Total `data/`: about 1.0 GB planned** (budget: 2 GB kept, 8 GB peak). This is updated with the measured size once the FSD50K and DEMAND downloads finish.
+
+**Not used:**
+- **AudioSet** is deliberately not used for testing. YAMNet was trained on AudioSet, so testing on it would measure memorisation, not how well YAMNet generalises to new homes.
+- **MUSAN** is not used. FSD50K's Speech and Music clips cover the TV-guard sound instead.
+- **FSD50K and AudioSet:** FSD50K shares AudioSet's *labels*, but its audio is Freesound clips, not AudioSet's YouTube audio.
+
+#### FSD50K subset (`data/fsd50k/`)
+
+```bash
+python -m eval.model.download_fsd50k --list   # mapping, counts and sizes; metadata only
+python -m eval.model.download_fsd50k          # ~765 MB of HTTP range requests, ~390 MB kept
+```
+
+- **Download:** the eval audio is a 6.3 GB split zip (`.z01` + `.zip`), and re-joining it would need about 12.5 GB. Instead, `rangezip.py` reads the archive's central directory over HTTP byte ranges and fetches only the selected clips, converting each to 16 kHz mono WAV in memory. Peak disk use is about the kept size. Clips already on disk are skipped, so a run can be resumed.
+- **Mapping** (exact FSD50K class names): `Doorbell` → doorbell, `Knock` → door_knock (all knocks), `Shatter` → glass_break (`Glass` alone is mostly clinking), `Bark` → dog_bark, `Crying_and_sobbing` → baby_cry (only if the Freesound title or tags say baby, infant or newborn), `Microwave_oven` → appliance_beep, `Water_tap_and_faucet` and `Sink_(filling_or_washing)` → water_running.
+- **Skipped clips:** a clip mapping to two of our categories is skipped.
+- **Not in FSD50K:** smoke alarm (only a generic `Alarm`, not used), pressure cooker (no whistle class) and Television.
+- **TV backgrounds:** 300 `Speech` and 300 `Music` clips (seed 0) whose labels contain no target-like class. In the loader they are label `negative`, `negative_type` `speech`/`music`.
+- **Attribution:** `data/fsd50k/metadata.csv` keeps every clip's licence, licence URL, uploader, title and Freesound URL. `FSD50K_LICENSE_AND_ATTRIBUTION.txt` has the citation (Fonseca et al., 2022).
+
+#### Freesound (`data/freesound/`, by hand)
+
+```bash
+python -m eval.model.datasets --init-freesound   # creates data/freesound/<category>/ and metadata.csv
+```
+
+- **Adding clips:** put each clip in `data/freesound/<category>/` and add a row to `data/freesound/metadata.csv` with `file` (e.g. `doorbell/123456_ding.wav`), `author`, `url` and `license`.
+- **Licences:** only **CC0** and **CC-BY** clips are used. A file with another licence, or without a row, is skipped and reported by `python -m eval.model.datasets`.
+- **Use:** these clips are test-only, `source` = `freesound`, condition `clean`. For CC-BY, keep the author and URL: they are the attribution.
+
+#### DEMAND noise (`data/demand/`)
+
+```bash
+python -m eval.model.download_demand          # ~40 MB transferred, no zip written to disk
+```
+
+- **What's kept:** DKITCHEN (kitchen), DLIVING (living room) and DWASHING (laundry room) at 16 kHz. Only channels 1 and 9 of the 16 microphones are kept, read from inside the Zenodo zips by byte range.
+- **Citation:** Thiemann et al., 2013. CC BY 4.0.
+
+#### Mixer (`eval/model/mixer.py`)
+
+`mix(clean, noise, snr_db, rng)` adds a randomly offset noise segment, looped if it's too short, scaled so the **active-part** SNR equals `snr_db`. Active part means the RMS of the clean clip's non-silent windows. A whole-clip RMS would make short events in silent clips much louder than the stated SNR. The result is clipped to [-1, 1]. The SNRs used are 20, 10, 5 and 0 dB. Mixes are rebuilt from a seed and never saved.
+
 ### Loader (`eval/model/datasets.py`)
 
 ```python
@@ -151,7 +234,7 @@ One script per experiment, plus `run_all.py`. CSVs go to `eval/model/results/`, 
 
 ```bash
 python -m eval.model.download_esc50        # once
-python -m eval.model.run_all               # every experiment, ~1-2 min on ESC-50 (laptop CPU)
+python -m eval.model.run_all               # every experiment (runtime: see the end of this section)
 python -m eval.model.run_all --smoke       # synthetic mini-dataset in a temp folder: checks every script end to end (~10 s)
 python -m eval.model.exp1_yamnet --limit 100       # any one experiment; --limit N files for a quick look
 ```
@@ -304,6 +387,73 @@ One row per dataset × recorder × method × level, plus `recorder` = `all` (eve
 | `false_match_rate_negatives` | the same, on negative items only |
 | `same_category_other_device_match_rate` | summed over the profiles |
 | `tp`, `fn`, `fp`, `tn` | summed over the profiles |
+
+### Noise robustness: F1 vs SNR (`exp_noise.py`)
+
+Every clean test clip is analysed as is and mixed with each DEMAND noise at 20, 10, 5 and 0 dB. Systems: `yamnet` (as in Experiment 1) and `yamnet+custom` (as in Experiment 4).
+- **Indian:** per person, their own profiles, tested on their own `quiet`-condition test clips.
+- **ESC-50 stand-in:** profiles from fold 1, tested on folds 2–5.
+- **FSD50K and Freesound:** `yamnet` only, because there are no profile clips.
+
+#### `noise_summary.csv`
+
+| Column | Meaning |
+|---|---|
+| `dataset` | `indian`, `esc50`, `fsd50k` or `freesound` |
+| `recorder` | whose profiles and clips (Indian); `all` otherwise |
+| `noise` | `clean`, `DKITCHEN`, `DLIVING`, `DWASHING`, or `all` (the three noises together) |
+| `snr_db` | 20, 10, 5 or 0; empty for `clean` |
+| `system` | `yamnet` or `yamnet+custom` |
+| `level` | `window` or `clip` |
+| `n`, `files`, `accuracy`, `macro_f1` | as in `exp1_summary.csv` |
+| `macro_f1_clean` | the same system's macro F1 on the clean clips |
+| `delta_vs_clean` | `macro_f1` − `macro_f1_clean` (negative = noise hurts) |
+
+Chart: `macro_f1` against `snr_db`, one line per system, with `clean` as the rightmost point.
+
+#### `noise_per_class.csv`
+
+| Column | Meaning |
+|---|---|
+| `dataset`, `recorder`, `noise`, `snr_db`, `system`, `level` | as above |
+| `label`, `support`, `tp`, `fp`, `fn`, `precision`, `recall`, `f1` | as in `exp1_per_class.csv` |
+
+### TV-guard mixes for Experiment 5 (`exp5_tvguard.py`)
+
+For Vaidehi's TV-guard Experiment 5.
+- **Targets:** clips from every available dataset, at most 30 per source and category: FSD50K, ESC-50, Indian `quiet` clips and Freesound.
+- **Mixes:** each target alone (`clean`), and under an FSD50K `speech` or `music` clip at 20, 10, 5 and 0 dB. The SNR is the target against the background.
+- **Backgrounds alone:** up to 100 per type, as `snr_db` = `tv_only`. These must not alert.
+- **Per-window scores:** each window keeps YAMNet's category and context scores, so the TV guard can be replayed offline on exactly these mixes.
+
+#### `exp5_tvguard_windows.csv`
+One row per non-silent window.
+
+| Column | Meaning |
+|---|---|
+| `mix_id` | `<source>:<file>:<background_type>:<snr_db>` (or `:clean` / `:tv_only`) |
+| `source` | dataset of the target (`fsd50k`, `esc50`, `indian`, `freesound`); for `tv_only`, `fsd50k` |
+| `target_file`, `target_label` | target clip and its category; `target_label` = `none` for `tv_only` |
+| `background_type` | `speech`, `music`, or `none` for `clean` |
+| `background_file` | the FSD50K Speech/Music clip; empty for `clean` |
+| `snr_db` | 20, 10, 5, 0, `clean` or `tv_only` |
+| `window`, `start_s`, `rms` | window index, start time (s), RMS |
+| `score_smoke_alarm`, `score_glass_break`, `score_pressure_cooker`, `score_baby_cry`, `score_door_knock`, `score_doorbell`, `score_dog_bark`, `score_appliance_beep`, `score_water_running` | YAMNet score of each of the 9 categories |
+| `ctx_speech`, `ctx_music`, `ctx_television` | YAMNet context scores (the TV guard's inputs) |
+| `yamnet_pred` | top category if ≥ 0.15, else `none` |
+
+#### `exp5_tvguard_summary.csv`
+One row per background type × SNR × target label.
+
+| Column | Meaning |
+|---|---|
+| `background_type`, `snr_db`, `target_label` | as above |
+| `mixes` | number of mixes (clips) |
+| `windows` | non-silent windows in them |
+| `detection_rate` | clip level: fraction where YAMNet's clip prediction is the target (empty for `tv_only`) |
+| `any_alert_rate` | fraction with any alert. For `tv_only` this is the TV false-alert rate. |
+| `mean_best_target_score` | mean of each mix's highest window score for the target category |
+| `mean_ctx_speech`, `mean_ctx_music`, `mean_ctx_television` | mean context scores over the windows |
 
 ### Experiment 8: CPU and RAM, silence gate on vs off (`exp8_resources.py`)
 

@@ -12,6 +12,9 @@ Layout (same as the team Drive folder; everything under data/ is git-ignored):
     data/indian/test/<category>/<file>               test clips of a target sound
     data/indian/test/hard_negatives/<type>/<file>    sounds that must NOT alert (mixer, kettle, tv_ads, ...)
     data/esc50/audio/*.wav + data/esc50/meta/esc50.csv   (eval/model/download_esc50.py)
+    data/fsd50k/audio/*.wav + data/fsd50k/metadata.csv   (eval/model/download_fsd50k.py)
+    data/freesound/<category>/<file> + data/freesound/metadata.csv   (by hand; CC0/CC-BY only)
+    data/demand/<ENV>/chNN.wav                           (eval/model/download_demand.py; noise)
 
 <category> is a SoundSense category ID (contracts.types.CATEGORIES). An extra
 <condition>/ sub-folder (test/<category>/<condition>/<file>) is also accepted.
@@ -70,6 +73,9 @@ INDIAN_ROOT = DATA_ROOT / "indian"
 PROFILE_ROOT = INDIAN_ROOT / "profile"
 TEST_ROOT = INDIAN_ROOT / "test"
 ESC50_ROOT = DATA_ROOT / "esc50"
+FSD50K_ROOT = DATA_ROOT / "fsd50k"  # eval/model/download_fsd50k.py
+FREESOUND_ROOT = DATA_ROOT / "freesound"  # added by hand: <category>/ + metadata.csv
+DEMAND_ROOT = DATA_ROOT / "demand"  # eval/model/download_demand.py: <ENV>/chNN.wav
 
 SAMPLE_RATE = 16000
 HARD_NEGATIVES = "hard_negatives"
@@ -312,6 +318,116 @@ def list_esc50_clips(root: Path = ESC50_ROOT, problems: list[str] | None = None)
     return clips
 
 
+# --- FSD50K subset, Freesound, DEMAND (Part S7d) ----------------------------------------
+
+TV_BACKGROUND_TYPES = ("speech", "music")  # FSD50K Speech / Music clips: TV-guard backgrounds
+FREESOUND_LICENSES = ("CC0", "CC-BY")
+FREESOUND_FIELDS = ["file", "author", "url", "license"]
+DEMAND_ENVS = ("DKITCHEN", "DLIVING", "DWASHING")
+
+
+def list_fsd50k_clips(root: Path = FSD50K_ROOT, problems: list[str] | None = None) -> list[Clip]:
+    """The FSD50K eval subset listed in <root>/metadata.csv (download_fsd50k.py).
+
+    Targets have label = our category. Speech/Music clips (TV-guard
+    backgrounds) have label "negative" and negative_type "speech"/"music":
+    on their own they must not alert. condition "clean", source "fsd50k".
+    """
+    meta = Path(root) / "metadata.csv"
+    if not meta.exists():
+        return []
+    clips = []
+    with meta.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            path = Path(root) / row["file"]
+            if not path.exists():
+                if problems is not None:
+                    problems.append(f"{path}: listed in fsd50k metadata.csv but missing")
+                continue
+            target = row["role"] == "target"
+            clips.append(Clip(path=path, label=row["our_label"] if target else NEGATIVE, condition=ESC50_CONDITION,
+                              source="fsd50k", category=row["our_label"] if target else None,
+                              negative_type=None if target else row["our_label"], name=row["fsd50k_labels"]))
+    return clips
+
+
+def list_tv_backgrounds(root: Path = FSD50K_ROOT) -> dict[str, list[Clip]]:
+    """FSD50K Speech and Music clips, by type ("speech", "music")."""
+    clips = list_fsd50k_clips(root)
+    return {t: [c for c in clips if c.negative_type == t] for t in TV_BACKGROUND_TYPES}
+
+
+def init_freesound(root: Path = FREESOUND_ROOT) -> Path:
+    """Create <root>/<category>/ for every category and a metadata.csv template (if missing)."""
+    root = Path(root)
+    for c in CATEGORIES:
+        (root / c).mkdir(parents=True, exist_ok=True)
+    meta = root / "metadata.csv"
+    if not meta.exists():
+        with meta.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(FREESOUND_FIELDS)
+    return meta
+
+
+def _short_license(value: str) -> str:
+    v = value.strip().lower().replace(" ", "")
+    if v in ("cc0", "cc0-1.0") or "publicdomain/zero" in v:
+        return "CC0"
+    if v.startswith("cc-by-nc") or "/by-nc" in v:
+        return "CC-BY-NC"
+    if v in ("cc-by", "cc-by-3.0", "cc-by-4.0", "ccby") or "licenses/by/" in v:
+        return "CC-BY"
+    return value.strip()
+
+
+def list_freesound_clips(root: Path = FREESOUND_ROOT, problems: list[str] | None = None) -> list[Clip]:
+    """Hand-collected Freesound test clips: <root>/<category>/<file>, test-only, source "freesound".
+
+    Every file needs a row in <root>/metadata.csv (file, author, url,
+    license). Only CC0 and CC-BY are used; anything else, or a file without
+    a row, is skipped and reported in ``problems``.
+    """
+    root = Path(root)
+    problems = [] if problems is None else problems
+    meta = root / "metadata.csv"
+    rows = {}
+    if meta.exists():
+        with meta.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("file"):
+                    rows[row["file"].strip().replace("\\", "/")] = row
+    clips = []
+    if not root.is_dir():
+        return clips
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+        if folder.name not in CATEGORIES:
+            problems.append(f"{folder}: not a category ID")
+            continue
+        for path in _audio_files(folder):
+            rel = path.relative_to(root).as_posix()
+            row = rows.get(rel)
+            if row is None:
+                problems.append(f"freesound/{rel}: no row in metadata.csv (file, author, url, license); skipped")
+                continue
+            lic = _short_license(row.get("license", ""))
+            if lic not in FREESOUND_LICENSES:
+                problems.append(f"freesound/{rel}: licence {row.get('license')!r} is not CC0/CC-BY; skipped")
+                continue
+            clips.append(Clip(path=path, label=folder.name, condition=ESC50_CONDITION, source="freesound",
+                              category=folder.name, negative_type=None, name=row.get("author", "")))
+    return clips
+
+
+def list_demand_noise(root: Path = DEMAND_ROOT) -> dict[str, list[Path]]:
+    """DEMAND noise files by environment: {"DKITCHEN": [ch01.wav, ...], ...} (present ones only)."""
+    out = {}
+    for env in DEMAND_ENVS:
+        files = sorted((Path(root) / env).glob("ch*.wav"))
+        if files:
+            out[env] = files
+    return out
+
+
 def list_test_clips(test_root: Path = TEST_ROOT, esc50_root: Path | None = ESC50_ROOT,
                problems: list[str] | None = None) -> list[Clip]:
     """Every test clip: our recordings (test/ + hard_negatives/) then ESC-50 (if present)."""
@@ -374,14 +490,29 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check the evaluation datasets and summarise them.")
     parser.add_argument("--indian", type=Path, default=INDIAN_ROOT)
     parser.add_argument("--esc50", type=Path, default=ESC50_ROOT)
+    parser.add_argument("--fsd50k", type=Path, default=FSD50K_ROOT)
+    parser.add_argument("--freesound", type=Path, default=FREESOUND_ROOT)
+    parser.add_argument("--demand", type=Path, default=DEMAND_ROOT)
     parser.add_argument("--decode", action="store_true", help="also decode every file (finds unreadable ones)")
+    parser.add_argument("--init-freesound", action="store_true",
+                        help="create data/freesound/<category>/ and an empty metadata.csv template, then exit")
     args = parser.parse_args()
 
+    if args.init_freesound:
+        meta = init_freesound(args.freesound)
+        print(f"Created {args.freesound}/<category>/ for {len(CATEGORIES)} categories and {meta} "
+              f"(columns: {', '.join(FREESOUND_FIELDS)}; licence must be CC0 or CC-BY)")
+        return
     problems: list[str] = []
     profile = list_profile_clips(args.indian / "profile", problems=problems)
     test = list_test_clips(args.indian / "test", args.esc50, problems=problems)
+    extra = list_fsd50k_clips(args.fsd50k, problems) + list_freesound_clips(args.freesound, problems)
     print(f"Profile clips ({args.indian / 'profile'}): {len(profile)}\n{summary(profile)}\n")
     print(f"Test clips ({args.indian / 'test'} + {args.esc50}): {len(test)}\n{summary(test)}\n")
+    print(f"Supplementary test clips (FSD50K + Freesound): {len(extra)}\n{summary(extra)}\n")
+    demand = list_demand_noise(args.demand)
+    print("DEMAND noise: " + (", ".join(f"{e} ({len(f)} channels)" for e, f in demand.items()) or "(none)") + "\n")
+    test += extra
     if args.decode:
         for clip in profile + test:
             try:

@@ -199,3 +199,56 @@ def test_readme_documents_every_csv_column():
         section = text.split(f"`{name}`", 1)[1].split("\n#", 1)[0]
         for f in fields:
             assert f"`{f}`" in section, f"{name}: column {f} not documented"
+
+
+# --- S7d: noise robustness and TV-guard mixes ---------------------------------------
+
+def test_noise_robustness_rows_for_every_snr_and_system(smoke_results):
+    work, _ = smoke_results
+    rows = read(work / "results" / "noise_summary.csv")
+    esc = [r for r in rows if r["dataset"] == "esc50" and r["level"] == "clip"]
+    assert {r["system"] for r in esc} == {"yamnet", "yamnet+custom"}
+    seen = {(r["noise"], r["snr_db"]) for r in esc}
+    assert ("clean", "") in seen
+    for snr in ("20", "10", "5", "0"):
+        assert {("DKITCHEN", snr), ("DLIVING", snr), ("all", snr)} <= seen
+    for r in esc:  # every row is compared with the same system's clean F1
+        clean = next(c for c in esc if c["noise"] == "clean" and c["system"] == r["system"])
+        assert r["macro_f1_clean"] == clean["macro_f1"]
+    fsd = {r["system"] for r in rows if r["dataset"] == "fsd50k"}
+    assert fsd == {"yamnet"}  # no profile split for FSD50K
+    indian = {(r["recorder"], r["system"]) for r in rows if r["dataset"] == "indian"}
+    assert ("shreeya", "yamnet+custom") in indian and ("vaidehi", "yamnet+custom") in indian
+
+
+def test_exp5_tvguard_mixes_have_window_scores_and_tv_only_rows(smoke_results):
+    work, _ = smoke_results
+    summary = read(work / "results" / "exp5_tvguard_summary.csv")
+    tv_only = [r for r in summary if r["snr_db"] == "tv_only"]
+    assert {r["background_type"] for r in tv_only} == {"speech", "music"}
+    assert all(r["target_label"] == "none" and r["detection_rate"] == "" for r in tv_only)
+    mixes = {(r["background_type"], r["snr_db"]) for r in summary if r["target_label"] != "none"}
+    assert ("none", "clean") in mixes and {("speech", "0"), ("music", "20")} <= mixes
+    windows = read(work / "results" / "exp5_tvguard_windows.csv")
+    assert {"ctx_speech", "ctx_music", "ctx_television", "score_doorbell", "yamnet_pred"} <= set(windows[0])
+    per_mix = {r["mix_id"] for r in windows}
+    assert any(m.endswith(":speech:5") for m in per_mix) and any(m.endswith(":tv_only") for m in per_mix)
+    assert all(0.0 <= float(r["ctx_speech"]) <= 1.0 for r in windows)
+
+
+def test_noise_and_tvguard_skip_without_demand_or_fsd50k(tmp_path, capsys):
+    from eval.model import exp5_tvguard, exp_noise
+
+    empty = cm.DataPaths(indian=tmp_path / "x", esc50=tmp_path / "x", fsd50k=tmp_path / "x",
+                         freesound=tmp_path / "x", demand=tmp_path / "x")
+    ex = cm.FeatureExtractor(model=object(), mapper=object())
+    assert exp_noise.run(tmp_path / "r", empty, ex) == []
+    assert exp5_tvguard.run(tmp_path / "r", empty, ex) == []
+    text = capsys.readouterr().out
+    assert "[noise] SKIP all datasets: DEMAND noise not found" in text and "download_demand" in text
+    assert "[exp5] SKIP TV-guard mixes: FSD50K Speech/Music clips not found" in text
+
+
+def test_freesound_only_licensed_clips_reach_experiments(tmp_path):
+    paths = run_all.make_smoke_data(tmp_path / "data")
+    assert [c.path.name for c in cm.get_freesound(paths)] == ["bark_cc_by.wav"]  # the CC-BY-NC one is skipped

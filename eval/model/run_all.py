@@ -24,9 +24,9 @@ from pathlib import Path
 import numpy as np
 
 from eval.model import common as cm
-from eval.model import exp1_yamnet, exp4_custom, exp6_methods, exp8_resources
+from eval.model import exp1_yamnet, exp4_custom, exp5_tvguard, exp6_methods, exp8_resources, exp_noise
 
-EXPERIMENTS = ("exp1", "exp4", "exp6", "exp8")
+EXPERIMENTS = ("exp1", "exp4", "exp6", "noise", "exp5", "exp8")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_FIELDS = {
     "exp1_summary.csv": exp1_yamnet.SUMMARY_FIELDS,
@@ -38,6 +38,10 @@ EXPECTED_FIELDS = {
     "exp4_confusion.csv": exp4_custom.CONFUSION_FIELDS,
     "exp6_per_profile.csv": exp6_methods.PER_PROFILE_FIELDS,
     "exp6_summary.csv": exp6_methods.SUMMARY_FIELDS,
+    "noise_summary.csv": exp_noise.SUMMARY_FIELDS,
+    "noise_per_class.csv": exp_noise.PER_CLASS_FIELDS,
+    "exp5_tvguard_windows.csv": exp5_tvguard.WINDOW_FIELDS,
+    "exp5_tvguard_summary.csv": exp5_tvguard.SUMMARY_FIELDS,
     "exp8_resources.csv": exp8_resources.FIELDS,
 }
 
@@ -56,6 +60,10 @@ def run_all(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths()
             written += exp4_custom.run(out_dir, paths, extractor, limit=limit)
         elif name == "exp6":
             written += exp6_methods.run(out_dir, paths, extractor, limit=limit)
+        elif name == "noise":
+            written += exp_noise.run(out_dir, paths, extractor, limit=limit)
+        elif name == "exp5":
+            written += exp5_tvguard.run(out_dir, paths, extractor)
         elif name == "exp8":
             written += run_exp8_fresh(out_dir, paths, exp8_minutes)
         else:
@@ -68,7 +76,7 @@ def run_exp8_fresh(out_dir: Path, paths: cm.DataPaths, minutes: float) -> list[P
     """Experiment 8 in a new Python process, so its RAM figures don't include the
     other experiments' feature caches."""
     cmd = [sys.executable, "-m", "eval.model.exp8_resources", "--out", str(out_dir), "--minutes", str(minutes),
-           "--indian", str(paths.indian), "--esc50", str(paths.esc50)]
+           "--indian", str(paths.indian), "--esc50", str(paths.esc50)]  # exp8 events: Indian, else ESC-50
     proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     for line in proc.stdout.splitlines():
         if line.startswith("[exp8]"):
@@ -164,7 +172,44 @@ def make_smoke_data(root: Path, seed: int = 0) -> cm.DataPaths:
         sf.write(p, (0.01 * rng.standard_normal(3 * 16000)).astype(np.float32), 16000)
     sf.write(ind / "profile" / "background" / "living room.wav",  # shared (no recorder in the name)
              (0.01 * rng.standard_normal(3 * 16000)).astype(np.float32), 16000)
-    return cm.DataPaths(indian=ind, esc50=esc)
+
+    # FSD50K-style subset: two targets per category + Speech/Music TV backgrounds.
+    fsd = root / "fsd50k"
+    (fsd / "audio").mkdir(parents=True)
+    meta_rows, fid = [], 1000
+    for role, label, kind, fsd_label in [("target", "baby_cry", "cry", "Crying_and_sobbing"),
+                                         ("target", "dog_bark", "bark", "Bark,Dog"),
+                                         ("target", "door_knock", "knock", "Knock"),
+                                         ("tv_background", "speech", "cry", "Speech"),
+                                         ("tv_background", "music", "beep", "Music")]:
+        for _ in range(2):
+            fid += 1
+            sf.write(fsd / "audio" / f"{fid}.wav", _sound(kind, 3.0, 16000, rng), 16000)
+            meta_rows.append({"fname": fid, "file": f"audio/{fid}.wav", "role": role, "our_label": label,
+                              "fsd50k_labels": fsd_label, "license": "CC0", "license_url": "", "uploader": "smoke",
+                              "title": "smoke", "freesound_url": ""})
+    with open(fsd / "metadata.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(meta_rows[0]))
+        w.writeheader()
+        w.writerows(meta_rows)
+
+    # Freesound: one usable (CC-BY) and one skipped (CC-BY-NC) clip.
+    from eval.model import datasets as ds
+
+    fs = root / "freesound"
+    ds.init_freesound(fs)
+    sf.write(fs / "dog_bark" / "bark_cc_by.wav", _sound("bark", 2.0, 16000, rng), 16000)
+    sf.write(fs / "dog_bark" / "bark_nc.wav", _sound("bark", 2.0, 16000, rng), 16000)
+    with open(fs / "metadata.csv", "a", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["dog_bark/bark_cc_by.wav", "smoke", "https://freesound.org/s/1/", "CC-BY"])
+        w.writerow(["dog_bark/bark_nc.wav", "smoke", "https://freesound.org/s/2/", "CC-BY-NC"])
+
+    # DEMAND-style noise: 2 environments x 1 channel, 6 s.
+    for env in ("DKITCHEN", "DLIVING"):
+        (root / "demand" / env).mkdir(parents=True)
+        sf.write(root / "demand" / env / "ch01.wav", (0.02 * rng.standard_normal(6 * 16000)).astype(np.float32), 16000)
+    return cm.DataPaths(indian=ind, esc50=esc, fsd50k=fsd, freesound=fs, demand=root / "demand")
 
 
 def smoke(work_dir: Path, out_dir: Path | None = None) -> list[Path]:

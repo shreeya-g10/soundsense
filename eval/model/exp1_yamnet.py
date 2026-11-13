@@ -8,8 +8,10 @@ file's category, or "none" for negatives (ESC-50 negatives, hard_negatives/).
 Also at clip level (as one alert): the category of the clip's single highest
 window score, if >= threshold, else "none".
 
-Reported for ESC-50 and the Indian test set separately, and for the Indian
-set per condition (quiet / tv / fan / far). Missing datasets are skipped.
+Reported for each dataset separately: ESC-50, the Indian test set (also per
+condition: quiet / tv / fan / music), the FSD50K subset (its Speech/Music
+clips are negatives: TV-like sound must not alert) and hand-collected
+Freesound clips. Missing datasets are skipped.
 
     python -m eval.model.exp1_yamnet
     python -m eval.model.exp1_yamnet --threshold 0.3
@@ -96,7 +98,8 @@ def run(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths(),
         limit: int | None = None) -> list[Path]:
     extractor = extractor or cm.FeatureExtractor()
     all_rows: dict[str, list[dict]] = {"summary": [], "per_class": [], "confusion": [], "sweep": []}
-    for dataset, get in ((cm.ESC50, cm.get_esc50), (cm.INDIAN, cm.get_indian_test)):
+    for dataset, get in ((cm.ESC50, cm.get_esc50), (cm.INDIAN, cm.get_indian_test),
+                         (cm.FSD50K, cm.get_fsd50k), (cm.FREESOUND, cm.get_freesound)):
         try:
             clips = get(paths)
         except cm.DataMissing as exc:
