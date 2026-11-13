@@ -1,12 +1,19 @@
 """Experiment 4: YAMNet + custom profiles vs YAMNet alone.
 
-Owner: Shreeya (Role 1). Part S7.
+Owner: Shreeya (Role 1). Parts S7, S7c.
 
-One custom profile per category is built from data/indian/profile/<category>/
-(embedding method, centered scoring, default thresholds; profile/background/
-room sound, if present, fills the background bank). It is tested on
-data/indian/test/ only. Profile files are never test files: any test file
-whose path or bytes equal a profile file is dropped (and counted).
+Indian data, per person (recorder = their home = their device): one custom
+profile per category is built ONLY from that person's
+data/indian/profile/<category>/ clips (embedding method, centered scoring,
+default thresholds; their profile/background/ room sound, plus shared
+background clips, fill the background bank). It is then tested on ALL of
+data/indian/test/, reported separately by device:
+    own     test clips recorded by the same person: the realistic test
+            (their own cooker, door, ... in their own home)
+    other   everyone else's clips; same-category clips here are "same
+            category, different device"
+Profile files are never test files: any test file whose path or bytes equal
+a profile file is dropped (and counted).
 
 Per window, three systems:
     yamnet          top category if >= threshold, else "none" (= Experiment 1)
@@ -17,8 +24,8 @@ and at clip level (one alert per file: the best-similarity match over the
 clip's windows, else the YAMNet clip prediction).
 
 Until the Indian recordings exist this runs an ESC-50 stand-in (profiles
-from fold 1, test on folds 2-5), reported as dataset "esc50". Results for the
-two datasets are never mixed.
+from fold 1, test on folds 2-5; recorder and device "all"), reported as
+dataset "esc50". Results for the two datasets are never mixed.
 
     python -m eval.model.exp4_custom
     python -m eval.model.exp4_custom --dataset indian
@@ -38,15 +45,16 @@ from eval.model.metrics import classification_report, confusion_rows, predict_to
 
 NAME = "exp4"
 SYSTEMS = ("yamnet", "custom_only", "yamnet+custom")
-SUMMARY_FIELDS = ["dataset", "system", "condition", "level", "threshold", "n", "files", "profiles",
-                  "profile_files", "removed_overlap", "accuracy", "macro_f1", "macro_f1_yamnet", "delta_macro_f1"]
-PER_CLASS_FIELDS = ["dataset", "system", "condition", "level", "label", "support", "tp", "fp", "fn",
-                    "precision", "recall", "f1"]
-CONFUSION_FIELDS = ["dataset", "system", "condition", "level", "true", "pred", "count"]
+SUMMARY_FIELDS = ["dataset", "recorder", "device", "system", "condition", "level", "threshold", "n", "files",
+                  "profiles", "profile_files", "removed_overlap", "accuracy", "macro_f1", "macro_f1_yamnet",
+                  "delta_macro_f1"]
+PER_CLASS_FIELDS = ["dataset", "recorder", "device", "system", "condition", "level", "label", "support",
+                    "tp", "fp", "fn", "precision", "recall", "f1"]
+CONFUSION_FIELDS = ["dataset", "recorder", "device", "system", "condition", "level", "true", "pred", "count"]
 
 
-def predictions(feats: list[cm.ClipFeat], store, threshold: float) -> list[dict]:
-    """Per clip: truth, condition, and per-window / clip predictions of every system."""
+def predictions(feats: list[cm.ClipFeat], store, threshold: float, recorder: str | None = None) -> list[dict]:
+    """Per clip: truth, condition, device, and per-window / clip predictions of every system."""
     out = []
     for f in feats:
         windows = []
@@ -63,37 +71,42 @@ def predictions(feats: list[cm.ClipFeat], store, threshold: float) -> list[dict]
         clip = {"yamnet": yam_clip,
                 "custom_only": best_match[1] if best_match else cm.NONE,
                 "yamnet+custom": best_match[1] if best_match else yam_clip}
-        out.append({"true": cm.true_label(f.clip), "condition": f.clip.condition, "windows": windows, "clip": clip})
+        out.append({"true": cm.true_label(f.clip), "condition": f.clip.condition,
+                    "device": cm.device(f.clip, recorder), "windows": windows, "clip": clip})
     return out
 
 
 def evaluate(split: cm.Split, preds: list[dict], threshold: float) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {"summary": [], "per_class": [], "confusion": []}
-    conditions = ["all"] + (sorted({p["condition"] for p in preds}) if split.dataset == cm.INDIAN else [])
-    for condition in conditions:
-        group = [p for p in preds if condition == "all" or p["condition"] == condition]
-        for level in ("window", "clip"):
-            reports = {}
-            for system in SYSTEMS:
-                if level == "window":
-                    y_true = [p["true"] for p in group for _ in p["windows"]]
-                    y_pred = [w[system] for p in group for w in p["windows"]]
-                else:
-                    y_true = [p["true"] for p in group]
-                    y_pred = [p["clip"][system] for p in group]
-                if y_true:
-                    reports[system] = classification_report(y_true, y_pred, cm.LABELS)
-            base_f1 = reports["yamnet"]["macro_f1"] if "yamnet" in reports else None
-            for system, rep in reports.items():
-                base = {"dataset": split.dataset, "system": system, "condition": condition, "level": level}
-                delta = None if rep["macro_f1"] is None or base_f1 is None else rep["macro_f1"] - base_f1
-                rows["summary"].append({**base, "threshold": threshold, "n": rep["n"], "files": len(group),
-                                        "profiles": len(split.categories), "profile_files": len(split.profile),
-                                        "removed_overlap": split.removed, "accuracy": rep["accuracy"],
-                                        "macro_f1": rep["macro_f1"], "macro_f1_yamnet": base_f1,
-                                        "delta_macro_f1": delta})
-                rows["per_class"] += [{**base, **r} for r in rep["per_class"]]
-                rows["confusion"] += [{**base, **r} for r in confusion_rows(rep["confusion"], cm.LABELS)]
+    devices = ["all"] if split.recorder is None else ["own", "other"]
+    for dev in devices:
+        by_device = [p for p in preds if dev == "all" or p["device"] == dev]
+        conditions = ["all"] + (sorted({p["condition"] for p in by_device}) if split.dataset == cm.INDIAN else [])
+        for condition in conditions:
+            group = [p for p in by_device if condition == "all" or p["condition"] == condition]
+            for level in ("window", "clip"):
+                reports = {}
+                for system in SYSTEMS:
+                    if level == "window":
+                        y_true = [p["true"] for p in group for _ in p["windows"]]
+                        y_pred = [w[system] for p in group for w in p["windows"]]
+                    else:
+                        y_true = [p["true"] for p in group]
+                        y_pred = [p["clip"][system] for p in group]
+                    if y_true:
+                        reports[system] = classification_report(y_true, y_pred, cm.LABELS)
+                base_f1 = reports["yamnet"]["macro_f1"] if "yamnet" in reports else None
+                for system, rep in reports.items():
+                    base = {"dataset": split.dataset, "recorder": split.who, "device": dev, "system": system,
+                            "condition": condition, "level": level}
+                    delta = None if rep["macro_f1"] is None or base_f1 is None else rep["macro_f1"] - base_f1
+                    rows["summary"].append({**base, "threshold": threshold, "n": rep["n"], "files": len(group),
+                                            "profiles": len(split.categories), "profile_files": len(split.profile),
+                                            "removed_overlap": split.removed, "accuracy": rep["accuracy"],
+                                            "macro_f1": rep["macro_f1"], "macro_f1_yamnet": base_f1,
+                                            "delta_macro_f1": delta})
+                    rows["per_class"] += [{**base, **r} for r in rep["per_class"]]
+                    rows["confusion"] += [{**base, **r} for r in confusion_rows(rep["confusion"], cm.LABELS)]
     return rows
 
 
@@ -104,26 +117,28 @@ def run(out_dir: Path = cm.RESULTS_DIR, paths: cm.DataPaths = cm.DataPaths(),
     all_rows: dict[str, list[dict]] = {"summary": [], "per_class": [], "confusion": []}
     for dataset in datasets:
         try:
-            split = cm.custom_split(dataset, paths, limit)
+            splits = cm.custom_splits(dataset, paths, limit)
         except cm.DataMissing as exc:
             cm.skip(NAME, dataset, exc)
             continue
         note = " (ESC-50 stand-in: fold 1 profiles, folds 2-5 test)" if dataset == cm.ESC50 else ""
-        print(f"[{NAME}] {dataset}{note}: {len(split.categories)} profiles from {len(split.profile)} files, "
-              f"{len(split.test)} test files"
-              + (f", {split.removed} overlapping test files dropped" if split.removed else ""), flush=True)
-        with tempfile.TemporaryDirectory() as tmp:  # embeddings only, deleted afterwards
-            store, _ = cm.build_store(split, extractor, Path(tmp))
-            feats = extractor.many(split.test, label=f"{dataset} test")
-            preds = predictions(feats, store, threshold)
-        for k, v in evaluate(split, preds, threshold).items():
-            all_rows[k] += v
-        for r in all_rows["summary"]:
-            if r["dataset"] == dataset and r["condition"] == "all" and r["level"] == "window":
-                delta = "" if r["system"] == "yamnet" or r["delta_macro_f1"] is None else \
-                    f" (delta vs YAMNet {r['delta_macro_f1']:+.3f})"
-                print(f"[{NAME}] {dataset} {r['system']:14s} window macro F1 {cm.fmt(r['macro_f1'])}{delta}",
-                      flush=True)
+        for split in splits:
+            print(f"[{NAME}] {dataset}{note} recorder {split.who}: {len(split.categories)} profiles from "
+                  f"{len(split.profile)} files, {len(split.test)} test files"
+                  + (f", {split.removed} overlapping test files dropped" if split.removed else ""), flush=True)
+            with tempfile.TemporaryDirectory() as tmp:  # embeddings only, deleted afterwards
+                store, _ = cm.build_store(split, extractor, Path(tmp))
+                feats = extractor.many(split.test, label=f"{dataset} test")
+                preds = predictions(feats, store, threshold, split.recorder)
+            rows = evaluate(split, preds, threshold)
+            for k, v in rows.items():
+                all_rows[k] += v
+            for r in rows["summary"]:
+                if r["condition"] == "all" and r["level"] == "window" and r["device"] in ("all", "own"):
+                    delta = "" if r["system"] == "yamnet" or r["delta_macro_f1"] is None else \
+                        f" (delta vs YAMNet {r['delta_macro_f1']:+.3f})"
+                    print(f"[{NAME}] {dataset} {split.who} {r['device']:4s} {r['system']:14s} window macro F1 "
+                          f"{cm.fmt(r['macro_f1'])}{delta}", flush=True)
     if not all_rows["summary"]:
         print(f"[{NAME}] nothing to evaluate; no CSVs written.")
         return []

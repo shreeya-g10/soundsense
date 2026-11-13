@@ -52,7 +52,7 @@ def test_exp1_reports_both_datasets_and_every_indian_condition(smoke_results):
     seen = {(r["dataset"], r["condition"], r["level"]) for r in rows}
     for level in ("window", "clip"):
         assert ("esc50", "all", level) in seen
-        for cond in ("all", "quiet", "tv", "fan", "far"):
+        for cond in ("all", "quiet", "tv", "fan", "music"):
             assert ("indian", cond, level) in seen
     conf = read(work / "results" / "exp1_confusion.csv")
     esc_clip = [r for r in conf if r["dataset"] == "esc50" and r["condition"] == "all" and r["level"] == "clip"]
@@ -61,31 +61,78 @@ def test_exp1_reports_both_datasets_and_every_indian_condition(smoke_results):
     assert {float(r["threshold"]) for r in sweep} >= {0.05, 0.5, 0.95}
 
 
-def test_exp4_compares_systems_and_never_tests_on_profile_files(smoke_results):
+def test_exp4_compares_systems_per_recorder_and_device(smoke_results):
     work, _ = smoke_results
     rows = read(work / "results" / "exp4_summary.csv")
     for dataset in ("indian", "esc50"):
         systems = {r["system"] for r in rows if r["dataset"] == dataset}
         assert systems == set(exp4_custom.SYSTEMS)
-    yam = next(r for r in rows if r["dataset"] == "indian" and r["system"] == "yamnet"
-               and r["condition"] == "all" and r["level"] == "window")
-    exp1 = next(r for r in read(work / "results" / "exp1_summary.csv")
-                if r["dataset"] == "indian" and r["condition"] == "all" and r["level"] == "window")
-    assert yam["macro_f1"] == exp1["macro_f1"]  # the yamnet baseline IS Experiment 1 on the same files
-    assert float(yam["delta_macro_f1"]) == 0.0
+    indian = [r for r in rows if r["dataset"] == "indian"]
+    assert {(r["recorder"], r["device"]) for r in indian} == {
+        ("shreeya", "own"), ("shreeya", "other"), ("vaidehi", "own"), ("vaidehi", "other")}
+    assert {(r["recorder"], r["device"]) for r in rows if r["dataset"] == "esc50"} == {("all", "all")}
+    # Each person's own-device group is their own 9 test files (4 + 4 targets, 1 kettle).
+    own = [r for r in indian if r["device"] == "own" and r["condition"] == "all" and r["level"] == "clip"]
+    assert {r["files"] for r in own} == {"9"} and {r["profile_files"] for r in own} == {"4"}
+    # The yamnet baseline doesn't depend on whose profiles are loaded.
+    yam = {r["recorder"]: r for r in indian if r["system"] == "yamnet" and r["device"] == "own"
+           and r["condition"] == "all" and r["level"] == "window"}
+    assert float(yam["shreeya"]["delta_macro_f1"]) == 0.0
+
+
+def test_splits_per_recorder_use_only_their_own_profile_clips(tmp_path):
+    paths = run_all.make_smoke_data(tmp_path / "data")
+    splits = {s.recorder: s for s in cm.custom_splits(cm.INDIAN, paths)}
+    assert set(splits) == {"shreeya", "vaidehi"}
+    sh, va = splits["shreeya"], splits["vaidehi"]
+    assert {c.recorder for c in sh.profile} == {"shreeya"} and {c.recorder for c in va.profile} == {"vaidehi"}
+    assert sh.categories == ["baby_cry", "door_knock"] and va.categories == ["baby_cry", "dog_bark"]
+    assert [c.path for c in sh.test] == [c.path for c in va.test]  # both tested on ALL test clips
+    assert {c.recorder for c in sh.test} == {"shreeya", "vaidehi"}
+    # Room sound: their own home's background + the shared one, never the other person's.
+    assert sorted(c.recorder or "shared" for c in sh.room) == ["shared", "shreeya"]
+    assert sorted(c.recorder or "shared" for c in va.room) == ["shared", "vaidehi"]
 
 
 def test_disjoint_drops_test_files_identical_to_profile_files(tmp_path):
     paths = run_all.make_smoke_data(tmp_path / "data")
     profile = cm.get_indian_profile(paths)
-    copy = paths.test / "baby_cry" / "baby_cry_copy_quiet_1m_1.wav"
+    copy = paths.test / "baby_cry" / "baby_cry_sneha_quiet_near_9.wav"
     copy.write_bytes(profile[0].path.read_bytes())  # same audio, different name
-    split = cm.custom_split(cm.INDIAN, paths)
-    assert split.removed == 1 and copy not in [c.path for c in split.test]
-    assert not {c.path for c in split.profile} & {c.path for c in split.test}
-    esc = cm.custom_split(cm.ESC50, paths)
+    for split in cm.custom_splits(cm.INDIAN, paths):
+        assert split.removed == 1 and copy not in [c.path for c in split.test]
+        assert not {c.path for c in profile} & {c.path for c in split.test}
+    (esc,) = cm.custom_splits(cm.ESC50, paths)
+    assert esc.recorder is None and esc.who == "all"
     assert {cm.esc50_fold(c) for c in esc.profile + esc.generic} == {1}
     assert {cm.esc50_fold(c) for c in esc.test} == {2}
+
+
+def test_unnamed_profile_clips_are_left_out(tmp_path, capsys):
+    paths = run_all.make_smoke_data(tmp_path / "data")
+    import shutil
+
+    shutil.copy(next((paths.profile / "baby_cry").iterdir()), paths.profile / "baby_cry" / "my_cry.wav")
+    splits = cm.custom_splits(cm.INDIAN, paths)
+    assert all("my_cry.wav" not in [c.path.name for c in s.profile] for s in splits)
+    assert "1 profile clip(s) without a recorder name left out" in capsys.readouterr().out
+
+
+def test_relation_and_device():
+    from eval.model.datasets import Clip
+
+    def clip(category, recorder):
+        return Clip(Path("x.wav"), category or "negative", "quiet", "indian", category, None if category else "kettle",
+                    recorder=recorder)
+
+    assert cm.relation(clip("baby_cry", "shreeya"), "baby_cry", "shreeya") == cm.TARGET
+    assert cm.relation(clip("baby_cry", "vaidehi"), "baby_cry", "shreeya") == cm.SAME_CATEGORY_OTHER_DEVICE
+    assert cm.relation(clip("dog_bark", "shreeya"), "baby_cry", "shreeya") == cm.UNRELATED
+    assert cm.relation(clip(None, "shreeya"), "baby_cry", "shreeya") == cm.UNRELATED
+    assert cm.relation(clip("baby_cry", None), "baby_cry", None) == cm.TARGET  # ESC-50: no recorders
+    assert cm.device(clip("baby_cry", "shreeya"), "shreeya") == "own"
+    assert cm.device(clip("baby_cry", "vaidehi"), "shreeya") == "other"
+    assert cm.device(clip("baby_cry", None), None) == "all"
 
 
 def test_exp6_compares_methods_with_false_matches(smoke_results):
@@ -93,12 +140,23 @@ def test_exp6_compares_methods_with_false_matches(smoke_results):
     rows = read(work / "results" / "exp6_per_profile.csv")
     assert {r["method"] for r in rows} == {"embedding", "mfcc"}
     indian = [r for r in rows if r["dataset"] == "indian" and r["level"] == "window"]
+    assert {(r["recorder"], r["category"]) for r in indian} == {
+        ("shreeya", "baby_cry"), ("shreeya", "door_knock"), ("vaidehi", "baby_cry"), ("vaidehi", "dog_bark")}
     assert all(int(r["n_negatives"]) > 0 for r in indian)  # hard negatives + ESC-50 negatives
     for r in indian:
         assert int(r["tp"]) + int(r["fn"]) == int(r["n_target"])
         assert int(r["fp"]) + int(r["tn"]) == int(r["n_unrelated"]) == int(r["n_other_categories"]) + int(r["n_negatives"])
+    # Both recorded baby_cry: the other person's cries are reported separately, not as targets or false matches.
+    for who, other in (("shreeya", "vaidehi"), ("vaidehi", "shreeya")):
+        r = next(r for r in indian if r["recorder"] == who and r["category"] == "baby_cry" and r["method"] == "embedding")
+        assert int(r["n_same_category_other_device"]) > 0 and r["same_category_other_device_match_rate"] != ""
+        assert int(r["n_target"]) + int(r["n_same_category_other_device"]) > int(r["n_target"])
+    solo = next(r for r in indian if r["category"] == "door_knock" and r["method"] == "embedding")
+    assert int(solo["n_same_category_other_device"]) == 0 and solo["same_category_other_device_match_rate"] == ""
     summary = read(work / "results" / "exp6_summary.csv")
-    assert {(r["dataset"], r["method"]) for r in summary} >= {("indian", "embedding"), ("indian", "mfcc")}
+    keys = {(r["dataset"], r["recorder"], r["method"]) for r in summary}
+    assert keys >= {("indian", "shreeya", "embedding"), ("indian", "vaidehi", "mfcc"), ("indian", "all", "mfcc"),
+                    ("esc50", "all", "embedding")}
 
 
 def test_exp8_gate_on_skips_and_saves_cpu(smoke_results):

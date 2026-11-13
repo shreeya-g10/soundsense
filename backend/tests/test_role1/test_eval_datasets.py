@@ -30,23 +30,31 @@ def write(path, seconds=1.0, sr=SR, channels=1, **kw):
     return path
 
 
-# --- naming rule -------------------------------------------------------------------
+# --- naming rule (team Drive guide) -------------------------------------------------
 
-def test_parse_name_with_and_without_name():
-    p = ds.parse_name("pressure_cooker_hawkins_tv_3m_2", "pressure_cooker")
-    assert (p.prefix, p.name, p.condition, p.distance, p.take) == ("pressure_cooker", "hawkins", "tv", "3m", 2)
-    p = ds.parse_name("baby_cry_quiet_2.5m_1", "baby_cry")
-    assert p.name == "" and p.distance == "2.5m"
-    assert ds.parse_name("kettle_steel_fan_2m_1", "kettle").name == "steel"
+def test_parse_name_drive_guide():
+    p = ds.parse_name("pressure_cooker_shreeya_tv_near_2", "pressure_cooker")
+    assert (p.prefix, p.name, p.condition, p.distance, p.take) == ("pressure_cooker", "shreeya", "tv", "near", 2)
+    assert ds.parse_name("baby_cry_vaidehi_music_far_1", "baby_cry").distance == "far"
+    assert ds.parse_name("door_knock_sneha_fan_3m_4", "door_knock").distance == "3m"  # metres also accepted
+    assert ds.parse_name("door_knock_sneha_quiet_2.5m_1", "door_knock").distance == "2.5m"
+    assert ds.parse_name("kettle_sneha_fan_near_1", "kettle").name == "sneha"
+    p = ds.parse_name("Door_Knock_Shreeya_TV_Near_1", "door_knock")  # phones capitalise
+    assert (p.name, p.condition, p.distance) == ("shreeya", "tv", "near")
+    assert set(ds.CONDITIONS) == {"quiet", "tv", "fan", "music"}
+    assert ds.RECORDERS == ("shreeya", "vaidehi", "sneha")
 
 
 @pytest.mark.parametrize("stem, reason", [
-    ("doorbell_x_quiet_1m_1", "should start with 'door_knock_'"),
-    ("door_knock_1m_1", "expected"),
-    ("door_knock_main_loud_1m_1", "condition 'loud'"),
-    ("door_knock_main_quiet_1_1", "distance '1'"),
-    ("door_knock_main_quiet_1m_a", "take 'a'"),
-    ("door_knock_main_quiet_1m_0", "take '0'"),
+    ("doorbell_shreeya_quiet_near_1", "should start with 'door_knock_'"),
+    ("door_knock_quiet_near_1", "expected <name>_<condition>_<distance>_<n>"),  # no name
+    ("door_knock_main_door_quiet_near_1", "expected <name>"),  # name must be one word (the person)
+    ("door_knock_shreeya_far_near_1", "condition 'far'"),  # far is a distance now
+    ("door_knock_shreeya_loud_near_1", "condition 'loud'"),
+    ("door_knock_shreeya_quiet_middle_1", "distance 'middle'"),
+    ("door_knock_shreeya_quiet_3_1", "distance '3'"),
+    ("door_knock_shreeya_quiet_near_a", "take 'a'"),
+    ("door_knock_shreeya_quiet_near_0", "take '0'"),
 ])
 def test_parse_name_rejects_bad_names(stem, reason):
     with pytest.raises(ValueError, match=reason):
@@ -58,55 +66,58 @@ def test_parse_name_rejects_bad_names(stem, reason):
 @pytest.fixture
 def indian(tmp_path):
     root = tmp_path / "indian"
-    write(root / "profile" / "pressure_cooker" / "pressure_cooker_hawkins_quiet_1m_1.wav")
-    write(root / "profile" / "doorbell" / "doorbell_ding_quiet_1m_1.wav")
+    write(root / "profile" / "pressure_cooker" / "pressure_cooker_shreeya_quiet_near_1.wav")
+    write(root / "profile" / "doorbell" / "doorbell_vaidehi_quiet_near_1.wav")
     test = root / "test"
-    write(test / "pressure_cooker" / "pressure_cooker_hawkins_tv_3m_2.wav", sr=44100, channels=2)  # phone-like
-    write(test / "door_knock" / "far" / "door_knock_main_far_6m_1.wav")  # optional condition folder
+    write(test / "pressure_cooker" / "pressure_cooker_shreeya_tv_3m_2.wav", sr=44100, channels=2)  # phone-like
+    write(test / "door_knock" / "music" / "door_knock_sneha_music_far_1.wav")  # optional condition folder
     write(test / "door_knock" / "door_knock_badname.wav")
-    write(test / "hard_negatives" / "kettle" / "kettle_steel_fan_2m_1.flac", format="FLAC")
-    write(test / "hard_negatives" / "tv_ads" / "tv_ads_quiet_3m_1.wav")
+    write(test / "hard_negatives" / "kettle" / "kettle_vaidehi_fan_near_1.flac", format="FLAC")
+    write(test / "hard_negatives" / "tv_ads" / "tv_ads_amma_quiet_far_1.wav")  # unknown recorder
     write(test / "kitchen_misc" / "x.wav")  # not a category
     (test / "doorbell").mkdir(parents=True)
     (test / "doorbell" / "notes.txt").write_text("ignored")
     return root
 
 
-def test_list_test_clips_labels_conditions_and_sources(indian):
+def test_list_test_clips_labels_conditions_recorders(indian):
     problems: list[str] = []
     clips = ds.list_test_clips(indian / "test", esc50_root=None, problems=problems)
     by_name = {c.path.name: c for c in clips}
-    assert set(by_name) == {"pressure_cooker_hawkins_tv_3m_2.wav", "door_knock_main_far_6m_1.wav",
-                            "door_knock_badname.wav", "kettle_steel_fan_2m_1.flac", "tv_ads_quiet_3m_1.wav"}
-    c = by_name["pressure_cooker_hawkins_tv_3m_2.wav"]
+    assert set(by_name) == {"pressure_cooker_shreeya_tv_3m_2.wav", "door_knock_sneha_music_far_1.wav",
+                            "door_knock_badname.wav", "kettle_vaidehi_fan_near_1.flac", "tv_ads_amma_quiet_far_1.wav"}
+    c = by_name["pressure_cooker_shreeya_tv_3m_2.wav"]
     assert (c.label, c.condition, c.source, c.category, c.negative_type) == ("pressure_cooker", "tv", "indian", "pressure_cooker", None)
-    assert (c.name, c.distance, c.take, c.split) == ("hawkins", "3m", 2, "test")
-    k = by_name["kettle_steel_fan_2m_1.flac"]
-    assert (k.label, k.condition, k.category, k.negative_type) == ("negative", "fan", None, "kettle")
-    assert by_name["tv_ads_quiet_3m_1.wav"].name == ""
-    assert by_name["door_knock_main_far_6m_1.wav"].condition == "far"
-    assert by_name["door_knock_badname.wav"].condition == "unknown"
+    assert (c.recorder, c.name, c.distance, c.take, c.split) == ("shreeya", "shreeya", "3m", 2, "test")
+    k = by_name["kettle_vaidehi_fan_near_1.flac"]
+    assert (k.label, k.condition, k.category, k.negative_type, k.recorder) == ("negative", "fan", None, "kettle", "vaidehi")
+    d = by_name["door_knock_sneha_music_far_1.wav"]
+    assert (d.condition, d.distance, d.recorder) == ("music", "far", "sneha")
+    bad = by_name["door_knock_badname.wav"]
+    assert bad.condition == "unknown" and bad.recorder is None
+    assert by_name["tv_ads_amma_quiet_far_1.wav"].recorder == "amma"  # loaded, but reported:
+    assert any("tv_ads_amma" in p and "'amma' is not one of shreeya, vaidehi, sneha" in p for p in problems)
     assert any("door_knock_badname" in p for p in problems)
     assert any("kitchen_misc" in p and "not a category" in p for p in problems)
 
 
 def test_condition_folder_and_name_must_agree(tmp_path):
     root = tmp_path / "test"
-    write(root / "doorbell" / "tv" / "doorbell_ding_quiet_1m_1.wav")
+    write(root / "doorbell" / "tv" / "doorbell_shreeya_quiet_near_1.wav")
     write(root / "doorbell" / "fan" / "doorbell_oops.wav")
     problems: list[str] = []
     clips = {c.path.name: c for c in ds.list_test_clips(root, esc50_root=None, problems=problems)}
-    assert clips["doorbell_ding_quiet_1m_1.wav"].condition == "quiet"  # the name wins...
+    assert clips["doorbell_shreeya_quiet_near_1.wav"].condition == "quiet"  # the name wins...
     assert any("folder says 'tv'" in p for p in problems)  # ...and the mismatch is reported
     assert clips["doorbell_oops.wav"].condition == "fan"  # bad name: fall back to the folder
 
 
 def test_list_profile_clips(indian):
     clips = ds.list_profile_clips(indian / "profile")
-    assert sorted(c.category for c in clips) == ["doorbell", "pressure_cooker"]
+    assert sorted((c.category, c.recorder) for c in clips) == [("doorbell", "vaidehi"), ("pressure_cooker", "shreeya")]
     assert all(c.split == "profile" and c.source == "indian" for c in clips)
     (only,) = ds.list_profile_clips(indian / "profile", category="doorbell")
-    assert only.path.name == "doorbell_ding_quiet_1m_1.wav"
+    assert only.path.name == "doorbell_vaidehi_quiet_near_1.wav"
 
 
 def test_iter_test_files_yields_16k_mono_tuples(indian):
@@ -154,7 +165,7 @@ def test_load_audio_m4a(tmp_path):
 
 
 def test_undecodable_file_raises_and_is_skipped_by_iter(tmp_path):
-    bad = tmp_path / "test" / "doorbell" / "doorbell_ding_quiet_1m_1.m4a"
+    bad = tmp_path / "test" / "doorbell" / "doorbell_shreeya_quiet_near_1.m4a"
     bad.parent.mkdir(parents=True)
     bad.write_bytes(b"not audio at all")
     with pytest.raises(ds.AudioDecodeError, match="cannot decode"):
@@ -250,9 +261,15 @@ def test_main_with_zip_extracts_and_keeps_given_archive(tmp_path, monkeypatch, c
 
 def test_profile_background_folder_is_room_sound(tmp_path):
     root = tmp_path / "profile"
-    write(root / "doorbell" / "doorbell_ding_quiet_1m_1.wav")
-    write(root / "background" / "living room evening.m4a.wav")  # any name is fine
+    write(root / "doorbell" / "doorbell_shreeya_quiet_near_1.wav")
+    write(root / "background" / "living room evening.wav")  # any name: shared room sound
+    write(root / "background" / "background_vaidehi_fan_near_1.m4a.wav")  # not the rule: still shared
+    write(root / "background" / "background_vaidehi_fan_near_2.wav")  # Vaidehi's home
     problems: list[str] = []
     clips = ds.list_profile_clips(root, problems=problems)
-    assert sorted(c.label for c in clips) == ["background", "doorbell"] and problems == []
+    assert problems == []  # background files never cause naming problems
+    bg = {c.path.name: c for c in clips if c.label == "background"}
+    assert len(bg) == 3 and all(c.category is None for c in bg.values())
+    assert bg["background_vaidehi_fan_near_2.wav"].recorder == "vaidehi"
+    assert bg["living room evening.wav"].recorder is None
     assert ds.list_profile_clips(root, category="doorbell")[0].category == "doorbell"

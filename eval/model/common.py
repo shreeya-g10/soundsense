@@ -242,9 +242,18 @@ def skip(experiment: str, what: str, exc: DataMissing) -> None:
 
 # --- custom profiles (exp4, exp6) -------------------------------------------------
 
+TARGET = "target"
+SAME_CATEGORY_OTHER_DEVICE = "same_category_other_device"
+UNRELATED = "unrelated"
+
+
 @dataclass
 class Split:
-    """Files for a custom-profile experiment. Profile and test files never overlap."""
+    """Files for a custom-profile experiment. Profile and test files never overlap.
+
+    Indian data gives one Split per recorder: that person's profiles (their
+    home = their device) are tested against ALL test clips.
+    """
 
     dataset: str  # "indian" or "esc50" (stand-in: fold 1 profiles, folds 2-5 test)
     profile: list[ds.Clip]  # enrolment clips (with a category)
@@ -252,20 +261,50 @@ class Split:
     room: list[ds.Clip] = field(default_factory=list)  # room sound -> background bank (room + calibration)
     generic: list[ds.Clip] = field(default_factory=list)  # non-target clips -> background bank (generic)
     removed: int = 0  # test files dropped because they were also profile files
+    recorder: str | None = None  # whose profiles these are (Indian); None for ESC-50
 
     @property
     def categories(self) -> list[str]:
         return [c for c in CATEGORIES if any(p.category == c for p in self.profile)]
 
+    @property
+    def who(self) -> str:
+        return self.recorder or "all"
 
-def custom_split(dataset: str, paths: DataPaths, limit: int | None = None,
-                 esc50_negatives_in_test: bool = False) -> Split:
-    """Profile/test split for ``dataset``; raises DataMissing.
 
-    indian: profile/ -> profiles (profile/background/ -> room bank), test/ -> test
-            (+ ESC-50 negatives if ``esc50_negatives_in_test`` and downloaded).
-    esc50:  fold 1 targets -> profiles, fold 1 negatives -> generic bank,
-            folds 2-5 -> test.
+def relation(clip: ds.Clip, category: str, recorder: str | None) -> str:
+    """How a test clip relates to ``recorder``'s profile for ``category``.
+
+    TARGET: same category, recorded by the same person (their device/home);
+    without recorders (ESC-50) every clip of the category is a target.
+    SAME_CATEGORY_OTHER_DEVICE: same category, someone else's recording.
+    UNRELATED: any other category, or a negative.
+    """
+    if clip.category != category:
+        return UNRELATED
+    if recorder is None or clip.recorder == recorder:
+        return TARGET
+    return SAME_CATEGORY_OTHER_DEVICE
+
+
+def device(clip: ds.Clip, recorder: str | None) -> str:
+    """"own" / "other" device relative to ``recorder``; "all" without recorders."""
+    if recorder is None:
+        return "all"
+    return "own" if clip.recorder == recorder else "other"
+
+
+def custom_splits(dataset: str, paths: DataPaths, limit: int | None = None,
+                  esc50_negatives_in_test: bool = False, echo=print) -> list[Split]:
+    """Profile/test splits for ``dataset``; raises DataMissing.
+
+    indian: one Split per recorder with profile clips: profiles from that
+            person's profile/<category>/ clips only; room bank from their
+            profile/background/ clips (+ shared ones); test = every test/
+            clip (+ ESC-50 negatives if ``esc50_negatives_in_test``).
+            Profile clips without a valid recorder name are left out.
+    esc50:  one Split: fold 1 targets -> profiles, fold 1 negatives ->
+            generic bank, folds 2-5 -> test.
     """
     if dataset == INDIAN:
         profile, test = get_indian_profile(paths), get_indian_test(paths)
@@ -273,12 +312,22 @@ def custom_split(dataset: str, paths: DataPaths, limit: int | None = None,
         if esc50_negatives_in_test:
             test += [c for c in ds.list_esc50_clips(Path(paths.esc50)) if c.label == ds.NEGATIVE]
         test, removed = disjoint(profile + room, test)
-        return Split(INDIAN, profile, subset(test, limit), room=room, removed=len(removed))
+        test = subset(test, limit)
+        unnamed = [c for c in profile if c.recorder is None]
+        if unnamed:
+            echo(f"    {len(unnamed)} profile clip(s) without a recorder name left out "
+                 f"(run python -m eval.model.datasets)")
+        recorders = sorted({c.recorder for c in profile if c.recorder})
+        if not recorders:
+            raise DataMissing("No Indian profile clip has a recorder name (<category>_<name>_...).")
+        return [Split(INDIAN, [c for c in profile if c.recorder == r], test,
+                      room=[c for c in room if c.recorder in (r, None)], removed=len(removed), recorder=r)
+                for r in recorders]
     clips = get_esc50(paths)
     fold1 = [c for c in clips if esc50_fold(c) == ESC50_PROFILE_FOLD]
     test = [c for c in clips if esc50_fold(c) != ESC50_PROFILE_FOLD]
-    return Split(ESC50, [c for c in fold1 if c.category], subset(test, limit),
-                 generic=[c for c in fold1 if not c.category])
+    return [Split(ESC50, [c for c in fold1 if c.category], subset(test, limit),
+                  generic=[c for c in fold1 if not c.category])]
 
 
 def build_store(split: Split, extractor: FeatureExtractor, root: Path, method: str = "embedding",

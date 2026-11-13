@@ -6,7 +6,9 @@ Layout (same as the team Drive folder; everything under data/ is git-ignored):
 
     data/indian/profile/<category>/<file>            enrolment clips for custom profiles
     data/indian/profile/background/<file>            optional: normal room sound (no target), for
-                                                     the background bank; any file name
+                                                     the background bank. Name it
+                                                     background_<name>_<condition>_<distance>_<n> to
+                                                     mark whose home it is; any other name = shared
     data/indian/test/<category>/<file>               test clips of a target sound
     data/indian/test/hard_negatives/<type>/<file>    sounds that must NOT alert (mixer, kettle, tv_ads, ...)
     data/esc50/audio/*.wav + data/esc50/meta/esc50.csv   (eval/model/download_esc50.py)
@@ -14,12 +16,13 @@ Layout (same as the team Drive folder; everything under data/ is git-ignored):
 <category> is a SoundSense category ID (contracts.types.CATEGORIES). An extra
 <condition>/ sub-folder (test/<category>/<condition>/<file>) is also accepted.
 
-File names: <category>_<name>_<condition>_<distance>_<n>.<ext>
-    e.g. pressure_cooker_hawkins_tv_3m_2.m4a, door_knock_main_quiet_1m_1.wav,
-         hard_negatives/kettle/kettle_steel_fan_2m_1.mp3 (<type> instead of <category>)
-    name       free label for the device/source, may be empty: baby_cry_quiet_1m_3.wav
-    condition  quiet | tv | fan | far
-    distance   metres + "m", e.g. 1m, 2.5m
+File names (the team Drive naming guide): <category>_<name>_<condition>_<distance>_<n>.<ext>
+    e.g. pressure_cooker_shreeya_tv_near_2.m4a, door_knock_vaidehi_quiet_far_1.wav,
+         hard_negatives/kettle/kettle_sneha_fan_3m_1.mp3 (<type> instead of <category>)
+    name       who recorded it: shreeya | vaidehi | sneha (RECORDERS). Each person's home
+               is a different device/room, so the name is also the device.
+    condition  quiet | tv | fan | music
+    distance   near | far, or metres such as 3m / 2.5m
     n          take number 1, 2, 3, ...
 
 Phone recordings: m4a, mp3, wav, flac, ogg, aac, aiff and caf are accepted
@@ -72,7 +75,9 @@ SAMPLE_RATE = 16000
 HARD_NEGATIVES = "hard_negatives"
 BACKGROUND = "background"  # profile/background/: room sound for the background bank
 NEGATIVE = "negative"  # label of every clip that must not alert
-CONDITIONS = ("quiet", "tv", "fan", "far")
+CONDITIONS = ("quiet", "tv", "fan", "music")
+DISTANCES = ("near", "far")  # or metres: 3m, 2.5m
+RECORDERS = ("shreeya", "vaidehi", "sneha")  # <name>: who recorded it = whose home/device
 ESC50_CONDITION = "clean"  # ESC-50 clips: isolated sounds, no added room condition
 AUDIO_EXTS = {".wav", ".m4a", ".mp3", ".flac", ".ogg", ".aac", ".aiff", ".aif", ".caf"}
 
@@ -160,37 +165,44 @@ def load_audio(path: str | Path, sr: int = SAMPLE_RATE) -> np.ndarray:
 
 # --- file names --------------------------------------------------------------------
 
-_DISTANCE = re.compile(r"^\d+(\.\d+)?m$")
+_METRES = re.compile(r"^\d+(\.\d+)?m$")
 
 
 @dataclass(frozen=True)
 class NameParts:
     prefix: str  # category ID or hard-negative type
-    name: str
+    name: str  # who recorded it (RECORDERS)
     condition: str
-    distance: str
+    distance: str  # near | far | <metres>m
     take: int
 
 
 def parse_name(stem: str, prefix: str) -> NameParts:
-    """Parse ``<prefix>_<name>_<condition>_<distance>_<n>`` (name may be empty).
+    """Parse ``<prefix>_<name>_<condition>_<distance>_<n>`` (the Drive naming guide).
+
+    Case-insensitive (Shreeya_TV_Near -> shreeya, tv, near). A name that is
+    not in RECORDERS is accepted here; list clips reports it as a problem.
 
     Raises:
         ValueError: with the reason, if the name doesn't follow the rule.
     """
+    stem = stem.lower()
     if not stem.startswith(prefix + "_"):
         raise ValueError(f"should start with '{prefix}_' (its folder)")
     parts = stem[len(prefix) + 1:].split("_")
-    if len(parts) < 3:
-        raise ValueError("expected <name>_<condition>_<distance>_<n> after the folder name")
-    *name, condition, distance, take = parts
+    if len(parts) != 4:
+        raise ValueError(f"expected <name>_<condition>_<distance>_<n> after '{prefix}_' "
+                         f"(name = {' | '.join(RECORDERS)})")
+    name, condition, distance, take = parts
+    if not name:
+        raise ValueError(f"missing <name> (who recorded it: {' | '.join(RECORDERS)})")
     if condition not in CONDITIONS:
         raise ValueError(f"condition {condition!r} is not one of {', '.join(CONDITIONS)}")
-    if not _DISTANCE.match(distance):
-        raise ValueError(f"distance {distance!r} should look like 1m or 2.5m")
+    if distance not in DISTANCES and not _METRES.match(distance):
+        raise ValueError(f"distance {distance!r} should be near, far or metres like 3m")
     if not take.isdigit() or int(take) < 1:
         raise ValueError(f"take {take!r} should be 1, 2, 3, ...")
-    return NameParts(prefix, "_".join(name), condition, distance, int(take))
+    return NameParts(prefix, name, condition, distance, int(take))
 
 
 # --- clips ---------------------------------------------------------------------------
@@ -201,14 +213,16 @@ class Clip:
 
     path: Path
     label: str  # category ID, or NEGATIVE
-    condition: str  # quiet | tv | fan | far | clean (ESC-50) | unknown
+    condition: str  # quiet | tv | fan | music | clean (ESC-50) | unknown
     source: str  # "indian" | "esc50"
     category: str | None  # same as label for targets; None for negatives
     negative_type: str | None  # hard-negative <type> or ESC-50 category; None for targets
-    name: str = ""
-    distance: str | None = None
+    name: str = ""  # Indian: who recorded it; ESC-50: its ESC-50 category
+    distance: str | None = None  # near | far | <metres>m
     take: int | None = None
     split: str = "test"  # "test" | "profile"
+    recorder: str | None = None  # who recorded it = whose home/device (Indian); None for ESC-50,
+                                 # badly named files and shared background clips
 
     def load(self, sr: int = SAMPLE_RATE) -> np.ndarray:
         return load_audio(self.path, sr)
@@ -227,8 +241,16 @@ def _indian_clips(root: Path, split: str, problems: list[str]) -> list[Clip]:
         if folder.name == HARD_NEGATIVES and split == "test":
             groups = [(t.name, t, True) for t in sorted(folder.iterdir()) if t.is_dir()]
         elif folder.name == BACKGROUND and split == "profile":
-            clips += [Clip(path=p, label=BACKGROUND, condition="unknown", source="indian", category=None,
-                           negative_type=None, split=split) for p in _audio_files(folder)]
+            for p in _audio_files(folder):  # any name; background_<name>_... marks whose home it is
+                try:
+                    parts = parse_name(p.stem, BACKGROUND)
+                except ValueError:
+                    parts = None
+                clips.append(Clip(path=p, label=BACKGROUND, condition=parts.condition if parts else "unknown",
+                                  source="indian", category=None, negative_type=None,
+                                  name=parts.name if parts else "", distance=parts.distance if parts else None,
+                                  take=parts.take if parts else None, split=split,
+                                  recorder=parts.name if parts else None))
             continue
         elif folder.name in CATEGORIES:
             groups = [(folder.name, folder, False)]
@@ -244,6 +266,9 @@ def _indian_clips(root: Path, split: str, problems: list[str]) -> list[Clip]:
                 except ValueError as exc:
                     problems.append(f"{path.relative_to(root)}: {exc}")
                     parts = None
+                if parts and parts.name not in RECORDERS:
+                    problems.append(f"{path.relative_to(root)}: name {parts.name!r} is not one of "
+                                    f"{', '.join(RECORDERS)} (add new recorders to RECORDERS)")
                 condition = parts.condition if parts else "unknown"
                 if sub and sub[0] in CONDITIONS and parts and sub[0] != parts.condition:
                     problems.append(f"{path.relative_to(root)}: folder says {sub[0]!r}, name says {parts.condition!r}")
@@ -260,6 +285,7 @@ def _indian_clips(root: Path, split: str, problems: list[str]) -> list[Clip]:
                     distance=parts.distance if parts else None,
                     take=parts.take if parts else None,
                     split=split,
+                    recorder=parts.name if parts else None,
                 ))
     return clips
 
@@ -312,7 +338,7 @@ def iter_test_files(test_root: Path = TEST_ROOT, esc50_root: Path | None = ESC50
     """Yield ``(audio, label, condition, source)`` for every test file.
 
     audio: mono float32 at ``sr`` Hz. label: category ID or "negative".
-    condition: quiet/tv/fan/far, "clean" for ESC-50, "unknown" if the file
+    condition: quiet/tv/fan/music, "clean" for ESC-50, "unknown" if the file
     name breaks the naming rule. source: "indian" or "esc50".
     Files that can't be decoded are logged and skipped.
     """
@@ -331,7 +357,8 @@ def summary(clips: list[Clip]) -> str:
     if not clips:
         return "  (none)"
     conds = list(CONDITIONS) + [ESC50_CONDITION, "unknown"]
-    counts = Counter((c.source, c.label if c.label != NEGATIVE else f"negative:{c.negative_type}", c.condition)
+    counts = Counter((c.source + (f"/{c.recorder}" if c.recorder else ""),
+                      c.label if c.label != NEGATIVE else f"negative:{c.negative_type}", c.condition)
                      for c in clips)
     rows = sorted({(s, l) for s, l, _ in counts})
     used = [c for c in conds if any(k[2] == c for k in counts)]

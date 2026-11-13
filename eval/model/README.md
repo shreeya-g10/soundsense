@@ -15,6 +15,7 @@ The folders match the team Drive folder exactly. Download the Drive folder and p
 ```
 data/indian/
   profile/<category>/                     clips for teaching custom profiles (enrolment)
+  profile/background/                     optional: normal room sound, no target sound (background bank)
   test/<category>/                        test clips of a target sound
   test/hard_negatives/<type>/             sounds that must NOT alert
 ```
@@ -23,17 +24,22 @@ data/indian/
 - `<type>` is a short lowercase name for a hard negative, e.g. `mixer_grinder`, `kettle`, `tv_ads`, `utensils`, `phone_ringtone`, `temple_bell`, `pressure_horn`.
 - Optional: test clips may sit one level deeper by condition, as `test/<category>/<condition>/`. The loader accepts both. The condition is always read from the file name, and a mismatch with the folder is reported.
 
-**File names:** `<category>_<name>_<condition>_<distance>_<n>.<ext>`. In `hard_negatives/<type>/` the name starts with `<type>` instead.
+**File names** follow the team Drive naming guide: `<category>_<name>_<condition>_<distance>_<n>.<ext>`. In `hard_negatives/<type>/` the name starts with `<type>` instead.
 
-| Part | Rule | Examples |
+| Part | Rule | Values |
 |---|---|---|
-| `category` / `type` | the folder name | `pressure_cooker`, `kettle` |
-| `name` | what made the sound: brand, device or room, lowercase; may be left out | `hawkins`, `mainDoor`, `amma` |
-| `condition` | `quiet` (nothing else on), `tv` (TV or music playing), `fan` (fan or AC on), `far` (another room) | `tv` |
-| `distance` | metres from the phone to the source, then `m` | `1m`, `2.5m`, `6m` |
-| `n` | take number for this combination, starting at 1 | `1`, `2` |
+| `category` / `type` | the folder name | `pressure_cooker`, `kettle`, ... |
+| `name` | **who recorded it**. Each person's home is a different device and room, so this is also the device. | `shreeya`, `vaidehi`, `sneha` |
+| `condition` | what else was on | `quiet` (nothing), `tv`, `fan` (fan or AC), `music` |
+| `distance` | phone to the sound | `near`, `far`, or metres such as `3m` or `2.5m` |
+| `n` | take number for this combination, starting at 1 | `1`, `2`, ... |
 
-Examples: `pressure_cooker_hawkins_tv_3m_2.m4a`, `door_knock_main_quiet_1m_1.wav`, `baby_cry_quiet_1m_3.mp3` (no name), `hard_negatives/kettle/kettle_steel_fan_2m_1.m4a`. The last three parts are read from the right, so a name may contain underscores (`main_door`). `mainDoor` is easier to read, though.
+Examples: `pressure_cooker_shreeya_tv_near_2.m4a`, `door_knock_vaidehi_quiet_far_1.wav`, `baby_cry_sneha_music_3m_1.mp3`, `hard_negatives/kettle/kettle_sneha_fan_near_1.m4a`.
+- **Case:** names are read case-insensitively (`Door_Knock_Shreeya_TV_Near_1` works).
+- **Unknown names:** a name outside `RECORDERS` in `datasets.py` is loaded, but reported as a problem. Add new recorders there.
+- **Bad names:** a file that breaks the rule is still loaded, with condition `unknown` and no recorder. It is left out of the per-person profiles in Experiments 4 and 6.
+
+**Background (room sound):** `profile/background/` holds a few clips of each home's normal room sound, with nobody making a target sound. They fill the background bank used by centered scoring. Name a clip `background_<name>_<condition>_<distance>_<n>` (e.g. `background_vaidehi_fan_near_1.m4a`) to mark whose home it is. Any other file name counts as shared room sound and is used for everyone.
 
 **Recording:** phone recordings in m4a, mp3 or wav are all fine (also flac, ogg, aac, aiff, caf); the loader converts them to 16 kHz mono. Record only with the consent of everyone who can be heard. For `profile/`, record 3–5 clean takes of 3–5 s, at the distance you would normally be from the sound.
 
@@ -78,9 +84,9 @@ The list lives in `eval/model/datasets.py` (`ESC50_TO_CATEGORY`, `ESC50_NEGATIVE
 from eval.model.datasets import iter_test_files, list_test_clips, list_profile_clips
 
 for audio, label, condition, source in iter_test_files():   # every test file, decoded to 16 kHz mono float32
-    ...  # label: category ID or "negative"; condition: quiet/tv/fan/far, "clean" for ESC-50; source: "indian" or "esc50"
+    ...  # label: category ID or "negative"; condition: quiet/tv/fan/music, "clean" for ESC-50; source: "indian" or "esc50"
 
-clips = list_test_clips()           # metadata only (path, label, condition, source, negative_type, name, distance, take); clip.load() decodes
+clips = list_test_clips()           # metadata only (path, label, condition, source, recorder, negative_type, distance, take); clip.load() decodes
 cooker = list_profile_clips(category="pressure_cooker")     # enrolment clips
 ```
 
@@ -156,7 +162,11 @@ The smoke test also runs in the test suite: `backend/tests/test_role1/test_eval_
 - **Windows:** 0.96 s every 0.48 s, as in the app. Silent windows (RMS < 0.008, the silence gate default) are dropped, because the app never classifies them; their count is in `silent_windows`.
 - **Prediction:** the category with the highest YAMNet category score if it is ≥ 0.15 (`DETECTION_THRESHOLD`), else `none`. Negatives (ESC-50 negatives, `hard_negatives/`) have the true label `none`.
 - **Window level vs clip level:** `level` = `window` scores every window. `clip` scores one prediction per file, like one alert: the category of the file's single highest-scoring window, or `none`.
-- **Experiments 4 and 6:** profiles come from `data/indian/profile/` and are tested on `data/indian/test/`. A test file with the same path or the same bytes as a profile file is dropped (`removed_overlap`). Until those folders exist, an **ESC-50 stand-in** runs, reported as `dataset` = `esc50`: fold 1 targets build the profiles, fold 1 negatives fill the background bank, and folds 2–5 are the test set. Never mix the two datasets in one chart.
+- **Experiments 4 and 6, per person:** each person's profiles are built **only from their own** `data/indian/profile/` clips (`recorder`), as they would be in their own home. Their room sound comes from their background clips plus the shared ones. They are then tested against **all** of `data/indian/test/`:
+  - **Own sound (target):** the same category, recorded by the same person.
+  - **Same category, different device:** the same category recorded by someone else. These are reported separately: in Experiment 4 as `device` = `other`, in Experiment 6 as the `*_same_category_other_device` columns.
+  - **Overlap:** a test file with the same path or the same bytes as a profile file is dropped (`removed_overlap`).
+- **ESC-50 stand-in:** until the Indian folders exist, Experiments 4 and 6 run on ESC-50, reported as `dataset` = `esc50`, `recorder` = `all`. Fold 1 targets build the profiles, fold 1 negatives fill the background bank, and folds 2–5 are the test set. Never mix the two datasets in one chart.
 - **Missing values:** an empty cell means undefined. Precision is undefined when the class is never predicted, recall when it never occurs, and F1 when either is undefined. Macro F1 averages F1 over the classes that occur, counting a class that's never predicted as 0.
 - **Numbers:** fractions are 0–1 with 4 decimals; `*_pct` columns are 0–100.
 
@@ -170,7 +180,7 @@ One row per dataset × condition × level.
 | Column | Meaning |
 |---|---|
 | `dataset` | `esc50` or `indian` |
-| `condition` | `all`, or `quiet` / `tv` / `fan` / `far` (Indian only; ESC-50 is all `clean`) |
+| `condition` | `all`, or `quiet` / `tv` / `fan` / `music` (Indian only; ESC-50 is all `clean`) |
 | `level` | `window` or `clip` |
 | `threshold` | detection threshold used (0.15) |
 | `n` | items scored (windows or clips) |
@@ -211,7 +221,7 @@ The same evaluation for thresholds 0.05–0.95, to help map the settings' `sensi
 
 ### Experiment 4: YAMNet + custom profiles (`exp4_custom.py`)
 
-One embedding profile per category (centered scoring, default thresholds), built from profile files only. Three systems are compared on the same test windows:
+Per person (`recorder`), one embedding profile per category they recorded (centered scoring, default thresholds), built from their profile files only. Three systems are compared on the same test windows:
 - `yamnet`: Experiment 1 on these files.
 - `custom_only`: the best matching profile's category, else `none`.
 - `yamnet+custom`: the best matching profile's category if any profile matches, else YAMNet's prediction.
@@ -221,10 +231,12 @@ One embedding profile per category (centered scoring, default thresholds), built
 | Column | Meaning |
 |---|---|
 | `dataset` | `indian` or `esc50` (stand-in) |
+| `recorder` | whose profiles were loaded: `shreeya` / `vaidehi` / `sneha`; `all` for ESC-50 |
+| `device` | which test clips: `own` (recorded by `recorder`: the realistic test), `other` (everyone else's, including same category on a different device), or `all` (ESC-50) |
 | `system` | `yamnet`, `custom_only` or `yamnet+custom` |
 | `condition`, `level`, `threshold`, `n`, `files`, `accuracy`, `macro_f1` | as in `exp1_summary.csv` |
-| `profiles` | number of profiles (categories with profile files) |
-| `profile_files` | files used to build them |
+| `profiles` | number of profiles (categories `recorder` has profile files for) |
+| `profile_files` | `recorder`'s files used to build them |
 | `removed_overlap` | test files dropped because they were also profile files |
 | `macro_f1_yamnet` | macro F1 of `yamnet` in the same group |
 | `delta_macro_f1` | `macro_f1` − `macro_f1_yamnet` (positive = custom profiles help) |
@@ -233,57 +245,64 @@ One embedding profile per category (centered scoring, default thresholds), built
 
 | Column | Meaning |
 |---|---|
-| `dataset`, `system`, `condition`, `level` | as above |
+| `dataset`, `recorder`, `device`, `system`, `condition`, `level` | as above |
 | `label`, `support`, `tp`, `fp`, `fn`, `precision`, `recall`, `f1` | as in `exp1_per_class.csv` |
 
 #### `exp4_confusion.csv`
 
 | Column | Meaning |
 |---|---|
-| `dataset`, `system`, `condition`, `level` | as above |
+| `dataset`, `recorder`, `device`, `system`, `condition`, `level` | as above |
 | `true`, `pred`, `count` | as in `exp1_confusion.csv` |
 
 ### Experiment 6: embedding kNN vs MFCC (`exp6_methods.py`)
 
-For each method, one profile per category is built from the same files. Every test window is then scored against every profile:
-- **Target windows** (the profile's own category) give `tp` and `fn`. Recall is the hit rate.
+For each method and each person, one profile per category is built from the same files: that person's own profile clips. Every test window is then scored against every profile:
+- **Target windows** (the person's own sound: same category, same recorder) give `tp` and `fn`. Recall is the hit rate.
+- **Same category, different device** (someone else's recording of that category) is reported separately, in the `*_same_category_other_device` columns. It is not counted in `tp`/`fp`/F1/AUC, because matching someone else's cooker is neither a hit nor a false match.
 - **Unrelated windows** (every other category, plus all negatives: `hard_negatives/` and ESC-50 negatives) give `fp`, the false matches, and `tn`.
 
-At clip level, a clip counts as matched if any of its windows matched.
+At clip level, a clip counts as matched if any of its windows matched. On the ESC-50 stand-in there are no recorders, so every clip of the category is a target.
 
 #### `exp6_per_profile.csv`
-One row per dataset × method × category × level.
+One row per dataset × recorder × method × category × level.
 
 | Column | Meaning |
 |---|---|
 | `dataset` | `indian` or `esc50` (stand-in) |
+| `recorder` | whose profile: `shreeya` / `vaidehi` / `sneha`; `all` for ESC-50 |
 | `method` | `embedding` (YAMNet embedding, centered, margin rule) or `mfcc` (40-number MFCC baseline) |
 | `category` | the profile's category |
 | `level` | `window` or `clip` |
 | `threshold` | the method's match threshold (0.89 centered / 0.80 raw fallback, or 0.991 MFCC) |
-| `n_target` | target items (`tp` + `fn`) |
+| `n_target` | the person's own items of the category (`tp` + `fn`) |
 | `n_unrelated` | unrelated items (`fp` + `tn`) |
-| `tp`, `fn`, `fp`, `tn` | matched/missed targets, false/correct non-matches of unrelated items |
-| `accuracy` | (`tp` + `tn`) / all |
+| `tp`, `fn`, `fp`, `tn` | matched/missed own items, false/correct non-matches of unrelated items |
+| `accuracy` | (`tp` + `tn`) / (own + unrelated items) |
 | `precision`, `recall`, `f1` | detection metrics for this profile |
 | `false_match_rate` | `fp` / `n_unrelated` |
 | `fp_other_categories`, `n_other_categories` | false matches on, and number of, other categories' items |
 | `fp_negatives`, `n_negatives` | false matches on, and number of, negative items |
-| `mean_sim_target`, `mean_sim_unrelated` | mean similarity of target and unrelated items (at clip level, each clip's best window) |
-| `auc` | ROC AUC of target vs unrelated similarities: the chance a random target item scores higher than a random unrelated one (0.5 = chance, 1 = perfect). It doesn't depend on the threshold, so it compares the methods fairly. |
+| `n_same_category_other_device` | items of the same category recorded by someone else |
+| `matched_same_category_other_device` | how many of them matched the profile |
+| `same_category_other_device_match_rate` | `matched_same_category_other_device` / `n_same_category_other_device` (empty if nobody else recorded it) |
+| `mean_sim_target`, `mean_sim_same_category_other_device`, `mean_sim_unrelated` | mean similarity of each group (at clip level, each clip's best window) |
+| `auc` | ROC AUC of own (target) vs unrelated similarities: the chance a random target item scores higher than a random unrelated one (0.5 = chance, 1 = perfect). It doesn't depend on the threshold, so it compares the methods fairly. |
+| `auc_other_device_vs_unrelated` | the same, for other devices' same-category items vs unrelated: does the profile generalise to other homes? |
 
 #### `exp6_summary.csv`
-One row per dataset × method × level.
+One row per dataset × recorder × method × level, plus `recorder` = `all` (every person's profiles together) when there are several recorders.
 
 | Column | Meaning |
 |---|---|
-| `dataset`, `method`, `level` | as above |
+| `dataset`, `recorder`, `method`, `level` | as above |
 | `profiles` | number of profiles |
 | `macro_f1` | mean F1 over the profiles |
 | `mean_recall` | mean hit rate over the profiles |
 | `mean_auc` | mean `auc` over the profiles |
 | `false_match_rate` | all `fp` / all unrelated items, summed over the profiles |
 | `false_match_rate_negatives` | the same, on negative items only |
+| `same_category_other_device_match_rate` | summed over the profiles |
 | `tp`, `fn`, `fp`, `tn` | summed over the profiles |
 
 ### Experiment 8: CPU and RAM, silence gate on vs off (`exp8_resources.py`)
@@ -348,3 +367,4 @@ Run on 2026-11-13 on **ESC-50 only**; the Indian recordings aren't available yet
 - **CPU:** the gate skips 71.6% of windows and cuts CPU from 1.3% to 0.4% of one core (real-time equivalent).
 - **Inference:** ~2.6 ms per window either way.
 - **RAM:** peak 760 MB in both settings. That is mostly TensorFlow and YAMNet, so the gate saves CPU, not memory.
+- **RAM is noisy on macOS:** a repeat run on 2026-11-13 gave 891 MB (gate off) and 787 MB (gate on). Run-to-run differences of about ±100 MB come from macOS memory compression, so don't read a RAM difference between the settings as a gate effect without repeating the run.

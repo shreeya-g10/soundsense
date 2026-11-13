@@ -114,7 +114,6 @@ def _sound(kind: str, seconds: float, sr: int, rng: np.random.Generator) -> np.n
 
 
 SMOKE_ESC50 = {"crying_baby": "cry", "dog": "bark", "door_wood_knock": "knock", "clock_alarm": "beep", "rain": "rain"}
-SMOKE_INDIAN = {"baby_cry": "cry", "dog_bark": "bark", "door_knock": "knock"}
 
 
 def make_smoke_data(root: Path, seed: int = 0) -> cm.DataPaths:
@@ -138,26 +137,33 @@ def make_smoke_data(root: Path, seed: int = 0) -> cm.DataPaths:
         w.writeheader()
         w.writerows(rows)
 
+    # Indian: two recorders (two homes/devices). Both record baby_cry, so each person's
+    # profile also meets "same category, different device" clips.
     ind = root / "indian"
-    for cat, kind in SMOKE_INDIAN.items():
-        for n in (1, 2):
-            p = ind / "profile" / cat / f"{cat}_smoke_quiet_1m_{n}.wav"
-            p.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(p, _sound(kind, 2.0, 16000, rng), 16000)
-        for cond in ("quiet", "tv", "fan", "far"):
-            p = ind / "test" / cat / f"{cat}_smoke_{cond}_2m_1.wav"
-            p.parent.mkdir(parents=True, exist_ok=True)
-            x = _sound(kind, 2.0, 48000, rng) * (0.3 if cond == "far" else 1.0)
-            if cond in ("tv", "fan"):
-                x = x + 0.02 * rng.standard_normal(x.size).astype(np.float32)
-            sf.write(p, x, 48000)  # 48 kHz like a phone
-    for cond in ("quiet", "fan"):
-        p = ind / "test" / "hard_negatives" / "kettle" / f"kettle_smoke_{cond}_1m_1.wav"
+    homes = {"shreeya": {"baby_cry": "cry", "door_knock": "knock"},
+             "vaidehi": {"baby_cry": "cry", "dog_bark": "bark"}}
+    distances = {"quiet": "near", "tv": "far", "fan": "3m", "music": "near"}
+    for who, sounds in homes.items():
+        for cat, kind in sounds.items():
+            for n in (1, 2):
+                p = ind / "profile" / cat / f"{cat}_{who}_quiet_near_{n}.wav"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(p, _sound(kind, 2.0, 16000, rng), 16000)
+            for cond, dist in distances.items():
+                p = ind / "test" / cat / f"{cat}_{who}_{cond}_{dist}_1.wav"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                x = _sound(kind, 2.0, 48000, rng) * (0.3 if dist == "far" else 1.0)
+                if cond in ("tv", "fan", "music"):
+                    x = x + 0.02 * rng.standard_normal(x.size).astype(np.float32)
+                sf.write(p, x, 48000)  # 48 kHz like a phone
+        p = ind / "test" / "hard_negatives" / "kettle" / f"kettle_{who}_fan_near_1.wav"
         p.parent.mkdir(parents=True, exist_ok=True)
         sf.write(p, _sound("hiss", 2.0, 16000, rng), 16000)
-    bg = ind / "profile" / "background" / "room_1.wav"
-    bg.parent.mkdir(parents=True)
-    sf.write(bg, (0.01 * rng.standard_normal(3 * 16000)).astype(np.float32), 16000)
+        p = ind / "profile" / "background" / f"background_{who}_quiet_near_1.wav"  # their home's room sound
+        p.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(p, (0.01 * rng.standard_normal(3 * 16000)).astype(np.float32), 16000)
+    sf.write(ind / "profile" / "background" / "living room.wav",  # shared (no recorder in the name)
+             (0.01 * rng.standard_normal(3 * 16000)).astype(np.float32), 16000)
     return cm.DataPaths(indian=ind, esc50=esc)
 
 
