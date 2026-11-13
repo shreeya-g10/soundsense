@@ -37,6 +37,7 @@ from backend.custom.demo_profiles import AUDIO_EXTS
 from backend.custom.profile_store import SCORING_CENTERED, SCORING_RAW, YamnetProfileStore
 
 THRESHOLDS = np.round(np.arange(0.20, 0.991, 0.01), 2)
+MFCC_THRESHOLDS = np.round(np.arange(0.900, 0.9995, 0.001), 3)  # MFCC cosines are all close to 1
 
 
 @dataclass
@@ -58,7 +59,7 @@ def load_dataset(root: Path, background_label: str) -> tuple[dict[str, list[Path
 
 
 def run(root: Path, scoring: str, margin: bool, augment: bool, enrol: int | None,
-        background_label: str = "background", load=None, model=None) -> list[Trial]:
+        background_label: str = "background", load=None, model=None, method: str = "embedding") -> list[Trial]:
     if load is None:
         from backend.ml.demo_yamnet import load_wav as load
     labels, background = load_dataset(root, background_label)
@@ -66,7 +67,7 @@ def run(root: Path, scoring: str, margin: bool, augment: bool, enrol: int | None
     bg_audio = [load(str(f)) for f in background]
     all_files = [f for files in labels.values() for f in files] + background
     trials: list[Trial] = []
-    cache: dict[Path, np.ndarray] = {}
+    cache: dict[Path, list[tuple[np.ndarray, np.ndarray]]] = {}  # file -> [(window, embedding)]
     for label, files in labels.items():
         if len(files) < 2:
             continue
@@ -79,7 +80,7 @@ def run(root: Path, scoring: str, margin: bool, augment: bool, enrol: int | None
                 # plus the active windows of the enrolment room recording.
                 store.add_background(store.embed_audio(a, skip_silent=False), source="calibration")
                 store.add_background_from_audio(a)
-            pid = store.create(label, "doorbell")  # category is irrelevant here
+            pid = store.create(label, "doorbell", method=method)  # category is irrelevant here
             for f in files[:k]:
                 store.add_example_from_audio(pid, audio[f])
             enrolled = set(files[:k])
@@ -87,22 +88,24 @@ def run(root: Path, scoring: str, margin: bool, augment: bool, enrol: int | None
                 if f in enrolled:
                     continue
                 if f not in cache:
-                    cache[f] = store.embed_audio(audio.get(f) if f in audio else load(str(f)))
+                    windows = [w for _, w in store.active_windows(audio[f] if f in audio else load(str(f)))]
+                    cache[f] = list(zip(windows, store.features(windows, "embedding")))
                 best = -np.inf
-                for e in cache[f]:
-                    d = store.score(pid, e)
+                for w, e in cache[f]:
+                    d = store.score(pid, e, samples=w)
                     if not margin or d.background is None or d.similarity > d.background:
                         best = max(best, d.similarity)
                 trials.append(Trial(label, f, f in files, best))
     return trials
 
 
-def sweep(trials: list[Trial]) -> list[tuple[float, float, float, float]]:
+def sweep(trials: list[Trial], thresholds=None) -> list[tuple[float, float, float, float]]:
     """(threshold, precision, recall, f1) for each threshold."""
+    thresholds = THRESHOLDS if thresholds is None else thresholds
     best = np.array([t.best for t in trials])
     pos = np.array([t.positive for t in trials])
     rows = []
-    for th in THRESHOLDS:
+    for th in thresholds:
         pred = best >= th
         tp, fp, fn = int((pred & pos).sum()), int((pred & ~pos).sum()), int((~pred & pos).sum())
         p = tp / (tp + fp) if tp + fp else 1.0
@@ -126,14 +129,18 @@ def main() -> None:
     parser.add_argument("--background-label", default="background")
     parser.add_argument("--no-margin", action="store_true")
     parser.add_argument("--no-augment", action="store_true")
+    parser.add_argument("--method", choices=["embedding", "mfcc"], default="embedding",
+                        help="mfcc: the S6 baseline (scoring/margin don't apply, so it runs once)")
     args = parser.parse_args()
 
-    for scoring in (SCORING_RAW, SCORING_CENTERED):
+    settings = [("mfcc", "raw")] if args.method == "mfcc" else [("embedding", SCORING_RAW), ("embedding", SCORING_CENTERED)]
+    for method, scoring in settings:
         trials = run(args.root, scoring, not args.no_margin, not args.no_augment, args.enrol,
-                     args.background_label)
+                     args.background_label, method=method)
+        scoring = "mfcc" if method == "mfcc" else scoring
         if not trials:
             raise SystemExit("No label has >= 2 files to enrol and test.")
-        rows = sweep(trials)
+        rows = sweep(trials, MFCC_THRESHOLDS if method == "mfcc" else None)
         th, p, r, f1 = best_threshold(rows)
         n_pos = sum(t.positive for t in trials)
         pos = [t.best for t in trials if t.positive and np.isfinite(t.best)]
@@ -145,9 +152,9 @@ def main() -> None:
         if neg:
             print(f"  negatives best-window similarity: median {np.median(neg):.2f}  "
                   f"95th pct {np.percentile(neg, 95):.2f}  max {max(neg):.2f}")
-        print(f"  best threshold {th:.2f}: precision {p:.2f}, recall {r:.2f}, F1 {f1:.2f}")
+        print(f"  best threshold {th:.3f}: precision {p:.2f}, recall {r:.2f}, F1 {f1:.2f}")
         for t, pp, rr, ff in rows[::5]:
-            print(f"    t={t:.2f}  P={pp:.2f} R={rr:.2f} F1={ff:.2f}")
+            print(f"    t={t:.3f}  P={pp:.2f} R={rr:.2f} F1={ff:.2f}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+dataset,system,condition,level,threshold,n,files,profiles,profile_files,removed_overlap,accuracy,macro_f1,macro_f1_yamnet,delta_macro_f1
+esc50,yamnet,all,window,0.1500,6724,992,5,40,0,0.8831,0.7113,0.7113,0.0000
+esc50,custom_only,all,window,0.1500,6724,992,5,40,0,0.9097,0.5963,0.7113,-0.1150
+esc50,yamnet+custom,all,window,0.1500,6724,992,5,40,0,0.8876,0.7310,0.7113,0.0197
+esc50,yamnet,all,clip,0.1500,992,992,5,40,0,0.7692,0.6761,0.6761,0.0000
+esc50,custom_only,all,clip,0.1500,992,992,5,40,0,0.9355,0.7904,0.6761,0.1143
+esc50,yamnet+custom,all,clip,0.1500,992,992,5,40,0,0.7702,0.6832,0.6761,0.0071

@@ -486,20 +486,20 @@ class YamnetProfileStore:
             return _top_k_mean(bg, self._transform(embedding, mean), self.top_k)
 
     def score(self, profile_id: str, embedding: np.ndarray | builtins.list[float] | None,
-              samples: np.ndarray | None = None) -> ScoreDetail:
+              samples: np.ndarray | None = None, mfcc: np.ndarray | None = None) -> ScoreDetail:
         """Similarity, background/negative similarity and match decision for one window.
 
-        MFCC profiles use ``samples`` (the window's audio) if given, else the
-        MFCC remembered for ``embedding`` from a recent match(); if neither
-        is available the score is 0.
+        MFCC profiles use ``mfcc`` (a precomputed mfcc_vector) or ``samples``
+        (the window's audio) if given, else the MFCC remembered for
+        ``embedding`` from a recent match(); if none is available the score is 0.
         """
         with self._lock:
             profile = self._get(profile_id)
-            ctx = self._query_context(embedding, samples, need_mfcc=profile.method == METHOD_MFCC)
+            ctx = self._query_context(embedding, samples, need_mfcc=profile.method == METHOD_MFCC, mfcc=mfcc)
             return self._detail(profile, ctx)
 
     def match(self, embedding: np.ndarray | builtins.list[float] | None,
-              samples: np.ndarray | None = None) -> builtins.list[CustomMatch]:
+              samples: np.ndarray | None = None, mfcc: np.ndarray | None = None) -> builtins.list[CustomMatch]:
         """Profiles the window matches (threshold + margin + negatives rules), best first.
 
         ``samples`` (the window's audio, kept in memory only) is needed for
@@ -508,7 +508,7 @@ class YamnetProfileStore:
         """
         with self._lock:
             need_mfcc = any(p.method == METHOD_MFCC for p in self._profiles.values())
-            ctx = self._query_context(embedding, samples, need_mfcc)
+            ctx = self._query_context(embedding, samples, need_mfcc, mfcc=mfcc)
             matches = []
             for p in self._profiles.values():
                 d = self._detail(p, ctx)
@@ -544,7 +544,7 @@ class YamnetProfileStore:
         with self._lock:
             return {c: int(len(a)) for c, a in self._category_negatives.items()}
 
-    def _query_context(self, embedding, samples, need_mfcc: bool) -> dict:
+    def _query_context(self, embedding, samples, need_mfcc: bool, mfcc: np.ndarray | None = None) -> dict:
         """Transformed query vectors shared by all profiles for one window."""
         ctx: dict[str, Any] = {"emb": None, "bg": None, "mean": None, "mfcc": None}
         if embedding is not None:
@@ -552,13 +552,16 @@ class YamnetProfileStore:
             q = self._transform(embedding, mean)
             ctx.update(emb=q, mean=mean, bg=_top_k_mean(bg, q, self.top_k))
         if need_mfcc:
-            feature = None
-            if samples is not None:
+            if mfcc is not None:
+                feature = np.asarray(mfcc, np.float32).ravel()
+            elif samples is not None:
                 feature = mfcc_vector(samples)
                 if embedding is not None:
                     self._remember_mfcc(embedding, feature)
             elif embedding is not None:
                 feature = self._recent_mfcc.get(_key(embedding))
+            else:
+                feature = None
             if feature is not None:
                 ctx["mfcc"] = _unit(self._mfcc_view(feature))[0]
         return ctx

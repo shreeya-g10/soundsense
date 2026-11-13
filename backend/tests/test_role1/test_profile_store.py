@@ -820,3 +820,16 @@ def test_analyse_window_passes_samples_only_to_stores_that_accept_them():
     r = analyse_window(Model(), Mapper(), NewStore(), w, 1.0, GateDecision(False, 0.2), "Kitchen")
     assert seen["samples"] is w and r.custom_matches[0].profile_id == "p" and r.room == "Kitchen"
     assert analyse_window(Model(), Mapper(), OldStore(), w, 1.0, GateDecision(False, 0.2), "Hall").custom_matches == []
+
+
+def test_precomputed_mfcc_scores_like_samples(tmp_path):
+    from backend.custom.profile_store import mfcc_vector
+
+    store = YamnetProfileStore(tmp_path, model=NoModel(), mfcc_threshold=0.9)
+    pid = store.create("Whistle", "pressure_cooker", method="mfcc")
+    store.add_example_from_audio(pid, tone(1500, 3.0))
+    w = tone(1500, 0.96)[:WINDOW_SAMPLES]
+    by_samples = store.score(pid, None, samples=w)
+    by_mfcc = store.score(pid, None, mfcc=mfcc_vector(w))
+    assert by_mfcc == by_samples and by_mfcc.matched
+    assert [m.profile_id for m in store.match(None, mfcc=mfcc_vector(w))] == [pid]

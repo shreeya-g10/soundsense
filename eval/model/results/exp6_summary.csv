@@ -1,0 +1,5 @@
+dataset,method,level,profiles,macro_f1,mean_recall,mean_auc,false_match_rate,false_match_rate_negatives,tp,fn,fp,tn
+esc50,embedding,clip,5,0.7560,0.6562,0.9954,0.0019,0.0022,105,55,9,4666
+esc50,embedding,window,5,0.5256,0.3750,0.9817,0.0005,0.0005,385,592,15,32628
+esc50,mfcc,clip,5,0.0000,0.0000,0.5832,0.0009,0.0010,0,160,4,4671
+esc50,mfcc,window,5,0.0000,0.0000,0.5699,0.0001,0.0001,0,977,4,32639

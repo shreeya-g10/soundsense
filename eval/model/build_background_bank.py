@@ -7,8 +7,8 @@ embeddings of ESC-50 clips whose classes are NOT SoundSense targets, so
 centered scoring and the margin rule know what "ordinary sounds" look like
 even before the user's own room has been heard much.
 
-    # ESC-50 from https://github.com/karolpiczak/ESC-50, unzipped under data/ (git-ignored)
-    python -m eval.model.build_background_bank --esc50 data/esc50/ESC-50-master
+    python -m eval.model.download_esc50          # ESC-50 subset into data/esc50/ (git-ignored)
+    python -m eval.model.build_background_bank   # default --esc50 data/esc50
     python -m eval.model.build_background_bank --esc50 ... --per-class 4 --dry-run
     python -m eval.model.build_background_bank --clear     # empty generic bank (the default state)
 
@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from backend.custom.profile_store import BACKGROUND_CAPS, DEFAULT_ROOT, YamnetProfileStore
+from eval.model.datasets import ESC50_ROOT
 
 # ESC-50 classes too close to a SoundSense category to count as background.
 EXCLUDE = {
@@ -58,7 +59,8 @@ def esc50_clips(root: Path, per_class: int, exclude: set[str]) -> dict[str, list
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the ESC-50 generic background bank.")
-    parser.add_argument("--esc50", type=Path, help="ESC-50 folder (contains meta/esc50.csv and audio/)")
+    parser.add_argument("--esc50", type=Path, default=ESC50_ROOT,
+                        help="ESC-50 folder with meta/esc50.csv and audio/ (default data/esc50)")
     parser.add_argument("--per-class", type=int, default=8, help="clips per ESC-50 class (default 8)")
     parser.add_argument("--exclude", nargs="*", default=sorted(EXCLUDE), help="ESC-50 classes to leave out")
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="profile folder")
@@ -71,8 +73,6 @@ def main() -> None:
         store.set_background("generic", np.zeros((0, 1024), np.float32))
         print(f"Generic background bank cleared. Bank now: {store.background_counts()}")
         return
-    if args.esc50 is None:
-        parser.error("pass --esc50 <folder> (or --clear)")
 
     from backend.ml.demo_yamnet import load_wav
 
